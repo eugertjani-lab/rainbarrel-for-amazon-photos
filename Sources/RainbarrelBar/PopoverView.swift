@@ -11,8 +11,12 @@ struct PopoverView: View {
     @State private var showingYears: Bool
     @Environment(\.isSnapshot) private var isSnapshot
 
-    /// The panel never grows taller than this; longer content scrolls.
-    static let maxHeight: CGFloat = 680
+    /// The panel never grows taller than this; longer content scrolls. It follows the screen, within
+    /// 680 and 900 points, so the buttons at the bottom stay in view on most displays.
+    static var maxHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 800
+        return min(max(screen - 60, 680), 900)
+    }
 
     init(
         model: AppModel,
@@ -56,7 +60,9 @@ struct PopoverView: View {
         if let report = model.report {
             PanelHeader(driveName: model.driveName, mounted: report.driveMounted)
             RingRow(report: report)
-            if !report.years.isEmpty {
+            PrimaryActionArea(model: model)
+            // The list is as old as the last report, so it would only mislead while files arrive.
+            if !report.years.isEmpty, !model.isDownloadActive {
                 GapsSection(years: report.years, showAll: { showingYears = true })
             }
             DriveCard(report: report, name: model.driveName)
@@ -64,9 +70,11 @@ struct PopoverView: View {
         } else if let error = model.loadError {
             PanelHeader(driveName: model.driveName, mounted: nil)
             ProblemView(message: error)
+            PrimaryActionArea(model: model)
         } else {
             PanelHeader(driveName: model.driveName, mounted: nil)
             Text("Reading the catalog…").font(.system(size: 12)).foregroundStyle(.secondary)
+            PrimaryActionArea(model: model)
         }
 
         if model.report != nil, let error = model.loadError {
@@ -79,13 +87,14 @@ struct PopoverView: View {
                 Text(scan.message).font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }
-
-        VStack(spacing: 8) {
-            ButtonRow(model: model, openSettings: openSettings, quit: quit)
-            Text("Downloads arrive in a later version.")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
+        if let status = model.refreshStatus {
+            Text(status)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
+
+        ButtonRow(model: model, openSettings: openSettings, quit: quit)
     }
 }
 
@@ -390,10 +399,8 @@ private struct ButtonRow: View {
     let openSettings: () -> Void
     let quit: () -> Void
     @Environment(\.isSnapshot) private var isSnapshot
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let palette = Palette(scheme)
         HStack(spacing: 8) {
             if model.isScanning {
                 ScanningBlock(progress: model.scanProgress)
@@ -405,14 +412,14 @@ private struct ButtonRow: View {
                 Button { model.startScan() } label: {
                     Text("Scan drive").font(.system(size: 14, weight: .semibold))
                 }
-                .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
-                .disabled(model.isRefreshing || model.report?.driveMounted != true)
+                .buttonStyle(PanelButtonStyle(kind: .secondaryFill))
+                .disabled(model.isBusy || model.report?.driveMounted != true)
             }
             Button { model.refresh() } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .medium))
             }
             .buttonStyle(PanelButtonStyle(kind: .icon))
-            .disabled(model.isRefreshing || model.isScanning)
+            .disabled(model.isBusy)
             .accessibilityLabel("Refresh")
             .help("Refresh")
             moreMenu
@@ -473,5 +480,245 @@ private struct ScanningBlock: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.onDrive.opacity(0.12)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
+    }
+}
+
+// MARK: Primary action area
+
+/// The one state of the download side of the panel: a sign-in prompt, a note about the drive, the
+/// Download button, the progress card, or the paused card.
+private struct PrimaryActionArea: View {
+    let model: AppModel
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let palette = Palette(scheme)
+        let action = model.primaryAction
+        let notices = [model.downloadNotice, model.accountNotice].compactMap { $0 }
+        if case .none = action, notices.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                switch action {
+                case .none:
+                    EmptyView()
+                case .signIn:
+                    Button { model.signIn() } label: {
+                        Text("Sign in to Amazon").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
+                    Text("You sign in on Amazon's own page. Rainbarrel never sees your password.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .signInAgain:
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Sign-in expired").font(.system(size: 13, weight: .semibold))
+                            Text("Amazon needs you to sign in again. Your progress is saved.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    Button { model.signIn() } label: {
+                        Text("Sign in again").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
+                case .driveMissing:
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "externaldrive").foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("Connect the backup drive to download.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                case .driveReadOnly:
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(DownloadError.readOnlyMessage)
+                                .font(.system(size: 12))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Downloads need a drive formatted as APFS or exFAT.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                case .ready(let count, let bytes, let note):
+                    if let note { RunNote(text: note) }
+                    Button { model.startDownload() } label: {
+                        Text("Download \(DisplayFormat.number(count)) missing · \(DisplayFormat.bytesShort(bytes))")
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
+                    .disabled(model.isBusy)
+                case .nothingToDownload(let note):
+                    if let note { RunNote(text: note) }
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(palette.onDrive)
+                            .accessibilityHidden(true)
+                        Text("Nothing to download").font(.system(size: 13))
+                    }
+                    .frame(minHeight: 24)
+                    .accessibilityElement(children: .combine)
+                case .downloading(let display, let stopping):
+                    ProgressCard(
+                        display: display, activeHours: model.activeHoursText, mode: .downloading(stopping: stopping),
+                        model: model)
+                case .paused(let display):
+                    ProgressCard(display: display, activeHours: model.activeHoursText, mode: .paused, model: model)
+                }
+                ForEach(notices, id: \.self) { ProblemView(message: $0) }
+            }
+        }
+    }
+}
+
+/// The line about the run that just ended, above the Download button.
+private struct RunNote: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Files and bytes done, speed, time left and the file in flight, with Pause and Stop (or Resume and Stop).
+private struct ProgressCard: View {
+    enum Mode: Equatable {
+        case downloading(stopping: StopRequest?)
+        case paused
+    }
+
+    let display: DownloadDisplay
+    let activeHours: String?
+    let mode: Mode
+    let model: AppModel
+    @Environment(\.colorScheme) private var scheme
+
+    private var stopping: StopRequest? {
+        if case .downloading(let request) = mode { return request }
+        return nil
+    }
+
+    private var title: String {
+        switch mode {
+        case .paused: return "Paused"
+        case .downloading(let request):
+            switch request {
+            case .pause?: return "Pausing…"
+            case .stop?, .quit?: return "Stopping…"
+            case nil: return "Downloading"
+            }
+        }
+    }
+
+    /// The line under the bytes: why nothing moves, how long it takes, or what is saved.
+    private var statusLine: String {
+        if mode == .paused { return "Progress is saved. Resume to carry on." }
+        if stopping != nil { return "Finishing the files in flight." }
+        if display.waitingForHours {
+            return activeHours.map { "Waiting for active hours (\($0))" } ?? "Waiting for active hours"
+        }
+        if let until = display.backoffUntil {
+            return "Amazon is limiting requests. Continuing at \(DisplayFormat.timeOrDate(until))."
+        }
+        if let message = display.message { return message }
+        return display.timeLeft ?? "Estimating the time left…"
+    }
+
+    private var showsSpeed: Bool {
+        mode != .paused && stopping == nil && !display.waitingForHours && display.backoffUntil == nil
+    }
+
+    var body: some View {
+        let palette = Palette(scheme)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 8)
+                Text("\(DisplayFormat.number(display.filesDone)) of \(DisplayFormat.number(display.filesTotal)) files")
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            SplitBar(
+                fraction: display.fraction, first: palette.onDrive, second: Color.primary.opacity(0.10), height: 6)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Download progress")
+                .accessibilityValue("\(display.percent) percent")
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(DisplayFormat.bytesShort(display.bytesDone)) of \(DisplayFormat.bytesShort(display.bytesTotal))")
+                Spacer(minLength: 8)
+                if showsSpeed { Text(DisplayFormat.speed(bytesPerSecond: display.bytesPerSecond)) }
+            }
+            .font(.system(size: 12))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            Text(statusLine)
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let name = display.currentFile, mode != .paused {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo").font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                    Text(name)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Current file \(name)")
+            }
+            HStack(spacing: 8) {
+                switch mode {
+                case .downloading:
+                    Button { model.pauseDownload() } label: {
+                        Text("Pause").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondaryFill))
+                    .disabled(stopping != nil)
+                    Button { model.stopDownload() } label: {
+                        Text("Stop").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondaryFill))
+                    .disabled(stopping != nil)
+                case .paused:
+                    Button { model.resumeDownload() } label: {
+                        Text("Resume").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
+                    .disabled(model.isBusy)
+                    Button { model.stopDownload() } label: {
+                        Text("Stop").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondary))
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(Color.primary.opacity(0.04)))
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
     }
 }

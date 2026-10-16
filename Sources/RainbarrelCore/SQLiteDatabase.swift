@@ -203,6 +203,27 @@ public final class SQLiteDatabase {
             throw error
         }
     }
+
+    /// Like `transaction`, for a body that suspends (for example while it waits for the network).
+    /// Nothing else may use this connection while the body is suspended, because every statement
+    /// on it would join the transaction.
+    public func transactionAsync<T>(immediate: Bool = true, _ body: () async throws -> T) async throws -> T {
+        if transactionDepth > 0 {
+            return try await body()
+        }
+        try execute(immediate ? "BEGIN IMMEDIATE" : "BEGIN")
+        transactionDepth += 1
+        do {
+            let value = try await body()
+            transactionDepth -= 1
+            try execute("COMMIT")
+            return value
+        } catch {
+            transactionDepth -= 1
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
 }
 
 /// A prepared statement. Finalised when released.

@@ -2,21 +2,75 @@ import ArgumentParser
 import Foundation
 import RainbarrelCore
 
-struct RefreshCatalog: ParsableCommand {
+extension CatalogSourceChoice: ExpressibleByArgument {}
+
+/// `rainbarrel catalog ...`
+struct CatalogCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "catalog",
+        abstract: "Work with the cloud catalog.",
+        subcommands: [Refresh.self]
+    )
+
+    struct Refresh: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Refresh the cloud catalog from the Amazon Photos app index or from Amazon's web API.",
+            discussion: """
+                The source is the one set with `rainbarrel config set-catalog-source` (auto by default: the \
+                desktop app's index when it exists, Amazon's web API otherwise). The app's own database is \
+                never opened; a private snapshot is read instead. The web API needs a session from \
+                `rainbarrel auth import`; its first read lists the whole library, later reads only apply the \
+                changes since the last one.
+                """)
+
+        @Option(help: "Read from this source this time: app, web or auto.")
+        var source: CatalogSourceChoice?
+
+        @Flag(help: "Read the whole catalog from the web API even when its changes could be applied.")
+        var full = false
+
+        func run() async throws {
+            try await CatalogRefreshReport.run(source: source, full: full)
+        }
+    }
+}
+
+/// The old spelling of `catalog refresh`.
+struct RefreshCatalog: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "refresh-catalog",
-        abstract: "Copy the cloud catalog from the Amazon Photos app index into the state database.",
-        discussion: "The app's own database is never opened; a private snapshot is read instead.")
+        abstract: "Old name of `catalog refresh`.",
+        shouldDisplay: false)
 
-    func run() throws {
+    func run() async throws {
+        try await CatalogRefreshReport.run(source: nil, full: false)
+    }
+}
+
+enum CatalogRefreshReport {
+    static func run(source: CatalogSourceChoice?, full: Bool) async throws {
         let context = try AppContext.open()
-        let result = try context.refreshCatalog()
+        let outcome = try await context.refreshCatalog(source: source, full: full)
         let report = try context.reconciler().report(driveRoot: context.config.driveRoot)
-        print("Catalog refreshed from \(result.sourceDescription.sanitizedForTerminal)")
+        switch outcome.origin {
+        case .app:
+            print("Catalog refreshed from \(outcome.result.sourceDescription.sanitizedForTerminal)")
+        case .web:
+            switch outcome.mode {
+            case .full:
+                print("Catalog refreshed from the Amazon Photos web API (whole library read)")
+            case .incremental:
+                print("Catalog refreshed from the Amazon Photos web API (\(Format.number(outcome.changed)) changed, "
+                    + "\(Format.number(outcome.removed)) removed since the last refresh)")
+            }
+        }
         print("  Photos and videos:  \(Format.number(report.photosVideos.count))  (\(Format.bytes(report.photosVideos.bytes)))")
         print("  Distinct MD5s:      \(Format.number(report.distinctMD5))")
         print("  Live Photo videos:  \(Format.number(report.liveVideos.count))  (\(Format.bytes(report.liveVideos.bytes)))")
-        print("  Catalog as of:      \(Format.dateTime(result.sourceModifiedAt)) (\(Format.age(of: result.sourceModifiedAt)))")
+        if outcome.result.skippedCount > 0 {
+            print("  Left out (no MD5 or size at Amazon):  \(Format.number(outcome.result.skippedCount))")
+        }
+        print("  Catalog as of:      \(Format.dateTime(outcome.result.sourceModifiedAt)) (\(Format.age(of: outcome.result.sourceModifiedAt)))")
     }
 }
 

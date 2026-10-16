@@ -3,11 +3,15 @@ import Foundation
 public enum CatalogError: Error, CustomStringConvertible {
     case indexNotFound(String)
     case snapshotFailed(String)
+    /// A download run holds the lock, and it reads the catalog the refresh would replace.
+    case downloadInProgress
 
     public var description: String {
         switch self {
         case .indexNotFound(let detail): return "Amazon Photos app index not found: \(detail)"
         case .snapshotFailed(let detail): return "Could not read the Amazon Photos app index: \(detail)"
+        case .downloadInProgress:
+            return "A download is running right now and it uses the catalog. Refresh the catalog when the download has finished."
         }
     }
 }
@@ -95,7 +99,18 @@ public struct AmazonAppIndexSource: CloudCatalogSource {
           AND (kind = 'FILE' OR (kind = 'ASSET' AND assetType = 'LIVE_VIDEO'))
         """
 
+    /// Available folders (the root has an empty `parents` array).
+    static let folderQuery = """
+        SELECT id, name, parents FROM nodes WHERE kind = 'FOLDER' AND status = 'AVAILABLE'
+        """
+
     public func readCatalog(_ body: (CloudItem) throws -> Void) throws -> CatalogReadResult {
+        try readCatalog(folders: { _ in }, items: body)
+    }
+
+    public func readCatalog(
+        folders: (CloudFolder) throws -> Void, items body: (CloudItem) throws -> Void
+    ) throws -> CatalogReadResult {
         guard FileManager.default.fileExists(atPath: indexPath) else {
             throw CatalogError.indexNotFound(indexPath)
         }
@@ -103,6 +118,16 @@ public struct AmazonAppIndexSource: CloudCatalogSource {
         let modifiedAt = Self.modificationDate(ofIndexAt: indexPath) ?? Date()
         let snapshot = try Snapshot.make(of: indexPath)
         defer { snapshot.cleanUp() }
+
+        var folderCount = 0
+        let folderStatement = try snapshot.database.prepare(Self.folderQuery)
+        while try folderStatement.step() {
+            guard let id = folderStatement.string(0) else { continue }
+            try folders(CloudFolder(
+                nodeId: id, name: folderStatement.string(1) ?? "",
+                parentId: Self.firstParentID(in: folderStatement.string(2))))
+            folderCount += 1
+        }
 
         let statement = try snapshot.database.prepare(Self.catalogQuery)
         var count = 0
@@ -112,7 +137,8 @@ public struct AmazonAppIndexSource: CloudCatalogSource {
             count += 1
         }
         return CatalogReadResult(
-            sourceDescription: indexPath, sourceModifiedAt: modifiedAt, itemCount: count)
+            sourceDescription: indexPath, sourceModifiedAt: modifiedAt, itemCount: count,
+            folderCount: folderCount)
     }
 
     static func makeItem(from row: SQLiteStatement) -> CloudItem? {

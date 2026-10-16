@@ -17,9 +17,22 @@ public struct CatalogRefreshSummary: Codable, Sendable, Equatable {
     public var photosVideos: CountBytes
     public var distinctMD5: Int
     public var liveVideos: CountBytes
-    /// When the Amazon Photos app last changed its index (mtime of the `-wal` file).
+    /// When the catalog was last changed at its source: the Amazon Photos app's `-wal` mtime, or
+    /// the time of the web API read.
     public var catalogFreshness: Date
     public var refreshedAt: Date
+    /// Which source produced the catalog.
+    public var source: CatalogOrigin
+    /// `full` when the whole catalog was read, `incremental` when only the changes since the last refresh were.
+    public var mode: CatalogRefreshOutcome.Mode
+    /// Items and folders added or changed by an incremental refresh.
+    public var changed: Int
+    /// Items and folders removed by an incremental refresh.
+    public var removed: Int
+    /// Photos and videos that Amazon lists without an MD5 or a size; they cannot be compared and are left out.
+    public var skippedNodes: Int
+    /// Things worth a look in a catalog that was stored anyway, for example a file count that differs from Amazon's.
+    public var warnings: [String]
 }
 
 /// What a bounded or complete drive scan did, and what is left.
@@ -55,15 +68,27 @@ public struct RainbarrelTools: Sendable {
 
     public let paths: AppPaths
     private let catalogSource: CatalogSourceProvider
+    /// Where the Amazon session is kept (the Keychain on macOS unless configured otherwise).
+    public let sessionStore: any SessionStore
+    /// Clock, randomness and network of the download engine; tests replace them.
+    public let downloadEnvironment: DownloadEnvironment
+    /// File system questions of `organize`; tests replace them.
+    public let organizeEnvironment: OrganizeEnvironment
 
     public init(
         paths: AppPaths = .default(),
         catalogSource: @escaping CatalogSourceProvider = { config in
             try AmazonAppIndexSource.resolve(explicitPath: config.amazonIndexPath)
-        }
+        },
+        sessionStore: (any SessionStore)? = nil,
+        downloadEnvironment: DownloadEnvironment = .live,
+        organizeEnvironment: OrganizeEnvironment = .live
     ) {
         self.paths = paths
         self.catalogSource = catalogSource
+        self.sessionStore = sessionStore ?? SessionStoreFactory.make(paths: paths)
+        self.downloadEnvironment = downloadEnvironment
+        self.organizeEnvironment = organizeEnvironment
     }
 
     // MARK: Configuration and state
@@ -87,45 +112,71 @@ public struct RainbarrelTools: Sendable {
 
     // MARK: Catalog
 
-    /// Re-snapshot the Amazon Photos app index and replace the cloud catalog.
-    public func refreshCatalog() throws -> CatalogRefreshSummary {
-        let config = try loadConfig()
-        let store = try openStore()
-        return try refreshCatalog(config: config, store: store)
+    private var refreshService: CatalogRefreshService {
+        CatalogRefreshService(
+            paths: paths, appSource: catalogSource, sessionStore: sessionStore, environment: downloadEnvironment)
     }
 
-    private func refreshCatalog(config: Config, store: StateStore) throws -> CatalogRefreshSummary {
-        let result: CatalogReadResult
-        do {
-            result = try CatalogRefresher(store: store).refresh(from: try catalogSource(config))
-        } catch let error as CatalogError {
-            throw ToolError("\(error). Open the Amazon Photos desktop app once, or point Rainbarrel at the index with `rainbarrel config set-index <path>`.")
-        } catch let error as SQLiteError {
-            throw ToolError("The Amazon Photos index could not be read: \(error.message)")
-        }
+    /// Refresh the cloud catalog from the configured source (the Amazon Photos app's index or the web API).
+    /// - Parameters:
+    ///   - source: overrides the configured source for this refresh.
+    ///   - full: read the whole catalog even when the change feed could bring it up to date.
+    public func refreshCatalog(
+        source: CatalogSourceChoice? = nil, full: Bool = false
+    ) async throws -> CatalogRefreshSummary {
+        let config = try loadConfig()
+        let store = try openStore()
+        return try await refreshCatalog(config: config, store: store, source: source, full: full)
+    }
+
+    func refreshCatalog(
+        config: Config, store: StateStore, source: CatalogSourceChoice? = nil, full: Bool = false
+    ) async throws -> CatalogRefreshSummary {
+        let outcome = try await refreshService.refresh(config: config, store: store, source: source, full: full)
         let report = try reconciler(store, config).report(driveRoot: config.driveRoot)
         return CatalogRefreshSummary(
             photosVideos: report.photosVideos, distinctMD5: report.distinctMD5,
-            liveVideos: report.liveVideos, catalogFreshness: result.sourceModifiedAt,
-            refreshedAt: report.catalogRefreshedAt ?? Date())
+            liveVideos: report.liveVideos, catalogFreshness: outcome.result.sourceModifiedAt,
+            refreshedAt: report.catalogRefreshedAt ?? Date(), source: outcome.origin, mode: outcome.mode,
+            changed: outcome.changed, removed: outcome.removed, skippedNodes: outcome.result.skippedCount,
+            warnings: outcome.result.warnings)
+    }
+
+    /// Choose where the catalog is read from. Switching to another source forgets the change-feed
+    /// checkpoint, so the next refresh from the web API starts with a full read.
+    @discardableResult
+    public func setCatalogSource(_ choice: CatalogSourceChoice) throws -> Config {
+        var config = try loadConfig()
+        guard config.catalogSource != choice else { return config }
+        config.catalogSource = choice
+        try saveConfig(config)
+        try openStore().setCatalogCheckpoint(nil)
+        return config
     }
 
     // MARK: Reports
+
+    /// The full report. This is the one report call that never touches the network.
+    public func currentReport() throws -> SyncReport {
+        let config = try loadConfig()
+        let store = try openStore()
+        return try reconciler(store, config).report(driveRoot: config.driveRoot)
+    }
 
     /// The full report.
     /// - Parameter refresh: true forces a catalog refresh (and fails if it cannot run), false never
     ///   refreshes, nil refreshes only when the last refresh is more than 10 minutes old (and then
     ///   falls back to the previous catalog if the refresh fails).
-    public func syncStatus(refresh: Bool? = nil) throws -> SyncReport {
+    public func syncStatus(refresh: Bool? = nil) async throws -> SyncReport {
         let config = try loadConfig()
         let store = try openStore()
         switch refresh {
         case true?:
-            _ = try refreshCatalog(config: config, store: store)
+            _ = try await refreshCatalog(config: config, store: store)
         case nil:
             if try CatalogRefresher(store: store).isStale() {
                 do {
-                    _ = try refreshCatalog(config: config, store: store)
+                    _ = try await refreshCatalog(config: config, store: store)
                 } catch {
                     if try store.cloudItemCount() == 0 { throw error }
                 }
@@ -149,7 +200,7 @@ public struct RainbarrelTools: Sendable {
     }
 
     public func breakdownByYear() throws -> [YearRow] {
-        try syncStatus(refresh: false).years
+        try currentReport().years
     }
 
     // MARK: Scanning

@@ -18,6 +18,10 @@ public struct AppPaths: Sendable, Equatable {
 
     public var configURL: URL { dataDirectory.appendingPathComponent("config.json") }
     public var stateURL: URL { dataDirectory.appendingPathComponent("state.sqlite") }
+    /// Where the Amazon session lives when it is kept in a file instead of the Keychain.
+    public var sessionURL: URL { dataDirectory.appendingPathComponent("session.json") }
+    /// Held (with `flock`) by the process that is downloading, so two runs never overlap.
+    public var downloadLockURL: URL { dataDirectory.appendingPathComponent("download.lock") }
 
     public init(dataDirectory: URL) {
         self.dataDirectory = dataDirectory

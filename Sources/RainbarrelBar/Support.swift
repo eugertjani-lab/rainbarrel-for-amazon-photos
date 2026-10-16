@@ -56,9 +56,10 @@ struct Palette {
 }
 
 /// Buttons drawn entirely in SwiftUI (so snapshots can draw them): a full-width primary button, a
-/// secondary one that fits its label, and a square icon button. All are at least 44 pt high.
+/// secondary one that fits its label, a secondary one that shares the row's width, and a square icon
+/// button. All are at least 44 pt high.
 struct PanelButtonStyle: ButtonStyle {
-    enum Kind { case primary, secondary, icon }
+    enum Kind { case primary, secondary, secondaryFill, icon }
 
     let kind: Kind
     var accent: Color = .accentColor
@@ -88,6 +89,12 @@ private struct PanelButtonBody: View {
                     .foregroundStyle(Color.primary)
                     .padding(.horizontal, 14)
                     .frame(minHeight: 44)
+                    .background(shape.fill(Color.primary.opacity(0.09)))
+            case .secondaryFill:
+                configuration.label
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .background(shape.fill(Color.primary.opacity(0.09)))
             case .icon:
                 configuration.label

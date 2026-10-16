@@ -2,10 +2,10 @@ import ArgumentParser
 import Foundation
 import RainbarrelCore
 
-struct Status: ParsableCommand {
+struct Status: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Show how the cloud catalog and the backup drive compare.",
-        discussion: "Refreshes the cloud catalog first when the last refresh is older than 10 minutes.")
+        discussion: "Refreshes the cloud catalog first when the last refresh is older than 10 minutes. The report names the source that produced the catalog.")
 
     @Flag(help: "Print the report as JSON.")
     var json = false
@@ -13,14 +13,22 @@ struct Status: ParsableCommand {
     @Flag(name: .customLong("no-refresh"), help: "Do not refresh the cloud catalog first.")
     var noRefresh = false
 
-    func run() throws {
+    func run() async throws {
         let context = try AppContext.open()
-        if !noRefresh { try context.refreshCatalogIfStale() }
+        if !noRefresh { try await context.refreshCatalogIfStale() }
         let report = try context.reconciler().report(driveRoot: context.config.driveRoot)
         if json {
             try printJSON(report)
         } else {
             printSummary(report)
+        }
+    }
+
+    private static func sourceText(_ source: CatalogOrigin?) -> String {
+        switch source {
+        case .app?: return "Amazon Photos app index"
+        case .web?: return "Amazon Photos web API"
+        case nil: return "(not recorded)"
         }
     }
 
@@ -33,6 +41,7 @@ struct Status: ParsableCommand {
         }
 
         print("Rainbarrel status")
+        row("Catalog source:", Self.sourceText(report.catalogSource))
         row("Catalog as of:", "\(Format.dateTime(report.catalogFreshness)) (\(Format.age(of: report.catalogFreshness)))")
         row("Catalog refreshed:", Format.dateTime(report.catalogRefreshedAt))
         row("Drive:", ((report.driveRoot ?? "(not configured)") + (report.scanSubpath.map { " / " + $0 } ?? "")).sanitizedForTerminal)
@@ -170,10 +179,10 @@ struct DriveOnly: ParsableCommand {
 
 struct Sync: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Download online-only items to the drive (not implemented yet).")
+        abstract: "Old name of `download`; use `rainbarrel download`.")
 
     func run() throws {
-        print("Downloading is not implemented yet (read-only monitoring milestone).")
+        print("This command was replaced by `rainbarrel download`. See `rainbarrel download --help`.")
         throw ExitCode(2)
     }
 }

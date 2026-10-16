@@ -8,11 +8,46 @@ public struct Config: Codable, Sendable, Equatable {
     public var scanSubpath: String?
     /// Optional explicit path to the Amazon Photos app index (`amzn1.account.*-cloud.db`).
     public var amazonIndexPath: String?
+    /// Host of the Amazon website the downloads talk to; nil means `www.amazon.com`. Other regions
+    /// use their own host, for example `www.amazon.co.uk`.
+    public var amazonHost: String?
+    /// Limits for the downloads engine (see `ThrottleConfig`); the catalog feed reads share the request limit.
+    public var throttle: ThrottleConfig
+    /// Where the cloud catalog is read from: the desktop app's index, Amazon's web API, or (the
+    /// default) the index when it is found and the web API otherwise.
+    public var catalogSource: CatalogSourceChoice
 
-    public init(driveRoot: String? = nil, scanSubpath: String? = nil, amazonIndexPath: String? = nil) {
+    public static let defaultAmazonHost = "www.amazon.com"
+
+    public init(
+        driveRoot: String? = nil, scanSubpath: String? = nil, amazonIndexPath: String? = nil,
+        amazonHost: String? = nil, throttle: ThrottleConfig = ThrottleConfig(),
+        catalogSource: CatalogSourceChoice = .auto
+    ) {
         self.driveRoot = driveRoot
         self.scanSubpath = scanSubpath
         self.amazonIndexPath = amazonIndexPath
+        self.amazonHost = amazonHost
+        self.throttle = throttle
+        self.catalogSource = catalogSource
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        driveRoot = try container.decodeIfPresent(String.self, forKey: .driveRoot)
+        scanSubpath = try container.decodeIfPresent(String.self, forKey: .scanSubpath)
+        amazonIndexPath = try container.decodeIfPresent(String.self, forKey: .amazonIndexPath)
+        amazonHost = try container.decodeIfPresent(String.self, forKey: .amazonHost)
+        throttle = try container.decodeIfPresent(ThrottleConfig.self, forKey: .throttle) ?? ThrottleConfig()
+        // An unknown value falls back to the default, so a typo in the file never stops the app from starting.
+        catalogSource = (try container.decodeIfPresent(String.self, forKey: .catalogSource))
+            .flatMap { CatalogSourceChoice(rawValue: $0) } ?? .auto
+    }
+
+    /// The Amazon host to talk to, lowercased.
+    public var effectiveAmazonHost: String {
+        let host = (amazonHost ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return host.isEmpty ? Self.defaultAmazonHost : host
     }
 
     /// The folder a scan walks: `driveRoot` plus `scanSubpath` when set.

@@ -50,7 +50,10 @@ public struct SyncReport: Codable, Sendable, Equatable {
     public var years: [YearRow]
 
     // Context
-    /// When the cloud catalog was last changed by the Amazon Photos app (mtime of the `-wal` file).
+    /// Where the stored catalog came from; nil when it was stored before Rainbarrel recorded this.
+    public var catalogSource: CatalogOrigin?
+    /// When the cloud catalog was last changed at its source: the mtime of the Amazon Photos app's
+    /// `-wal` file, or the time of the last read of the web API.
     public var catalogFreshness: Date?
     /// When Rainbarrel last copied the catalog into its state database.
     public var catalogRefreshedAt: Date?

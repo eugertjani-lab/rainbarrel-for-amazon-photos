@@ -1,5 +1,4 @@
 import ArgumentParser
-import Dispatch
 import Foundation
 import MCP
 import RainbarrelCore
@@ -12,8 +11,8 @@ struct Mcp: AsyncParsableCommand {
         abstract: "Run an MCP server on stdin/stdout so assistants can query the sync state.",
         discussion: """
             Tools: sync_status, list_online_only, list_drive_only, breakdown_by_year, refresh_catalog, \
-            scan_drive. Register it with an MCP client, for example: claude mcp add rainbarrel -- \
-            /path/to/rainbarrel mcp
+            scan_drive, download_status, download_batch, organize_preview. Register it with an MCP client, for example: \
+            claude mcp add rainbarrel -- /path/to/rainbarrel mcp
             """)
 
     func run() async throws {
@@ -24,7 +23,12 @@ struct Mcp: AsyncParsableCommand {
             instructions: """
                 Rainbarrel compares an Amazon Photos account with a backup drive by MD5. Start with \
                 sync_status. Use list_online_only and list_drive_only for details, refresh_catalog to \
-                re-read the Amazon Photos app index, and scan_drive to index new files on the drive.
+                re-read the catalog (from the Amazon Photos app index or the web API), and scan_drive to \
+                index new files on the drive. \
+                download_status shows the download queue, the Amazon session and the throttle settings; \
+                download_batch fetches a small batch of missing files to the drive and verifies each by MD5. \
+                organize_preview shows, without changing anything, how files already on the drive would be \
+                moved into the download folder layout.
                 """,
             capabilities: .init(tools: .init(listChanged: false)))
 
@@ -33,9 +37,7 @@ struct Mcp: AsyncParsableCommand {
         }
         await server.withMethodHandler(CallTool.self) { params in
             let arguments = params.arguments.map { Self.jsonArguments($0) }
-            let outcome = await Self.runOffTheCooperativePool {
-                registry.call(name: params.name, arguments: arguments)
-            }
+            let outcome = await registry.callAsync(name: params.name, arguments: arguments)
             return .init(content: [.text(outcome.text)], isError: outcome.isError)
         }
 
@@ -59,16 +61,5 @@ struct Mcp: AsyncParsableCommand {
 
     private static func convert<From: Encodable, To: Decodable>(_ value: From, to: To.Type) throws -> To {
         try JSONDecoder().decode(To.self, from: JSONEncoder().encode(value))
-    }
-
-    /// Tool work is blocking (file and database I/O, hashing); keep it off Swift's cooperative threads.
-    private static func runOffTheCooperativePool(
-        _ work: @escaping @Sendable () -> ToolCallOutcome
-    ) async -> ToolCallOutcome {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: work())
-            }
-        }
     }
 }

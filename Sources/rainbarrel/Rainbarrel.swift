@@ -8,41 +8,48 @@ struct Rainbarrel: AsyncParsableCommand {
         commandName: "rainbarrel",
         abstract: "Compare your Amazon Photos cloud catalog with a backup drive, by MD5.",
         discussion: """
-            Read-only monitoring: rainbarrel reads the Amazon Photos desktop app's local index and \
-            reports which photos and videos are backed up on your drive, which exist only online, \
-            and which exist only on the drive. It never writes to the drive.
+            rainbarrel reads your Amazon Photos catalog, from the desktop app's local index or, when \
+            the app is not installed, from Amazon's web API with your signed-in session. It reports which \
+            photos and videos are backed up on your drive, which exist only online, and which exist only \
+            on the drive. Scanning and reporting never write to the drive. `rainbarrel download` is the one \
+            command that does: it adds the missing files, never overwrites or deletes anything, and \
+            verifies every file by MD5. `rainbarrel organize` moves files that are already on the drive \
+            into the same folder layout, without copying or deleting anything.
             """,
         version: RainbarrelInfo.version,
         subcommands: [
-            ConfigCommand.self, RefreshCatalog.self, ImportHashes.self, Scan.self, Status.self,
-            OnlineOnly.self, DriveOnly.self, Mcp.self, Sync.self,
+            ConfigCommand.self, CatalogCommand.self, RefreshCatalog.self, ImportHashes.self, Scan.self, Status.self,
+            OnlineOnly.self, DriveOnly.self, Download.self, DownloadStatus.self, Organize.self, AuthCommand.self, Mcp.self,
+            Sync.self,
         ]
     )
 
-    /// Same flow as ArgumentParser's own `main()`, except that an error thrown while a command runs
+    /// Same flow as ArgumentParser's own `main()`, except that a runtime error thrown while a command runs
     /// is printed with control characters escaped, because messages can contain drive file names.
+    /// Everything else goes to `exit(withError:)` untouched.
     static func main() async {
-        var command: ParsableCommand
         do {
-            command = try await asyncParseAsRoot(nil)
-        } catch {
-            exit(withError: error)
-        }
-        do {
-            if var asyncCommand = command as? AsyncParsableCommand {
-                try await asyncCommand.run()
-            } else {
-                try command.run()
+            var command = try await asyncParseAsRoot(nil)
+            do {
+                if var asyncCommand = command as? AsyncParsableCommand {
+                    try await asyncCommand.run()
+                } else {
+                    try command.run()
+                }
+            } catch {
+                throw terminalSafe(error)
             }
         } catch {
-            exit(withError: terminalSafe(error))
+            Self.exit(withError: error)
         }
     }
 
+    /// Runtime errors become a one-line message with escaped control characters. ArgumentParser's own
+    /// errors keep its handling: `--help` is answered by an internal command whose `run()` throws a
+    /// `CommandError`, and ExitCode, CleanExit and ValidationError are its public types. The internal
+    /// types cannot be named here, so the module name tells them apart.
     private static func terminalSafe(_ error: Error) -> Error {
-        switch error {
-        case is ExitCode, is CleanExit, is ValidationError: return error
-        default: return CLIError(String(describing: error))
-        }
+        if String(reflecting: type(of: error)).hasPrefix("ArgumentParser.") { return error }
+        return CLIError(String(describing: error))
     }
 }

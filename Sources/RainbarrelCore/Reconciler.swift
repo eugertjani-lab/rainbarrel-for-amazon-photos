@@ -106,6 +106,7 @@ public struct Reconciler {
             driveUnhashedFiles: Int(unhashed),
             driveFilesWithErrors: Int(withErrors),
             years: years,
+            catalogSource: try store.catalogOrigin(),
             catalogFreshness: try store.getMetaDate(MetaKey.catalogSourceModifiedAt),
             catalogRefreshedAt: try store.getMetaDate(MetaKey.catalogRefreshedAt),
             driveRoot: driveRoot,

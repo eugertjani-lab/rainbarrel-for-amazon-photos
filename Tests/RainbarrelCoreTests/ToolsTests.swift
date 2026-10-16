@@ -20,44 +20,44 @@ struct ToolsTests {
 
     // MARK: RainbarrelTools
 
-    @Test func refreshCatalogStoresTheCatalogAndReturnsCounts() throws {
+    @Test func refreshCatalogStoresTheCatalogAndReturnsCounts() async throws {
         let fixture = try ToolsFixture(catalog: catalog)
-        let summary = try fixture.tools.refreshCatalog()
+        let summary = try await fixture.tools.refreshCatalog()
         #expect(summary.photosVideos == CountBytes(count: 2, bytes: 205))
         #expect(summary.distinctMD5 == 2)
         #expect(summary.liveVideos == CountBytes(count: 1, bytes: 50))
     }
 
-    @Test func syncStatusRefreshModes() throws {
+    @Test func syncStatusRefreshModes() async throws {
         let fixture = try ToolsFixture(catalog: catalog)
         // refresh: false never touches the catalog.
-        #expect(try fixture.tools.syncStatus(refresh: false).photosVideos.count == 0)
+        #expect(try await fixture.tools.syncStatus(refresh: false).photosVideos.count == 0)
         // nil refreshes because the catalog was never refreshed.
-        #expect(try fixture.tools.syncStatus(refresh: nil).photosVideos.count == 2)
+        #expect(try await fixture.tools.syncStatus(refresh: nil).photosVideos.count == 2)
         // Fresh now: nil does not refresh again, even though the source would now fail.
         let failing = RainbarrelTools(paths: fixture.tools.paths) { _ in throw CatalogError.indexNotFound("gone") }
-        #expect(try failing.syncStatus(refresh: nil).photosVideos.count == 2)
+        #expect(try await failing.syncStatus(refresh: nil).photosVideos.count == 2)
         // true forces a refresh and reports its failure.
-        #expect(throws: ToolError.self) { try failing.syncStatus(refresh: true) }
+        await #expect(throws: ToolError.self) { try await failing.syncStatus(refresh: true) }
     }
 
-    @Test func implicitRefreshFailureFallsBackToTheStoredCatalogButNeverFromNothing() throws {
+    @Test func implicitRefreshFailureFallsBackToTheStoredCatalogButNeverFromNothing() async throws {
         let broken = try ToolsFixture(catalogError: CatalogError.indexNotFound("no index"))
-        #expect(throws: (any Error).self) { try broken.tools.syncStatus(refresh: nil) }
+        await #expect(throws: (any Error).self) { try await broken.tools.syncStatus(refresh: nil) }
 
         let fixture = try ToolsFixture(catalog: catalog)
-        _ = try fixture.tools.refreshCatalog()
+        _ = try await fixture.tools.refreshCatalog()
         // Make the stored refresh look old, then break the source.
         let store = try fixture.tools.openStore()
         try store.setMetaDate(MetaKey.catalogRefreshedAt, Date(timeIntervalSinceNow: -3600))
         let failing = RainbarrelTools(paths: fixture.tools.paths) { _ in throw CatalogError.indexNotFound("gone") }
-        #expect(try failing.syncStatus(refresh: nil).photosVideos.count == 2)
+        #expect(try await failing.syncStatus(refresh: nil).photosVideos.count == 2)
     }
 
-    @Test func missingAmazonIndexBecomesAHumanReadableError() throws {
+    @Test func missingAmazonIndexBecomesAHumanReadableError() async throws {
         let fixture = try ToolsFixture(catalogError: CatalogError.indexNotFound("no amzn1.account.*-cloud.db in /somewhere"))
         do {
-            _ = try fixture.tools.refreshCatalog()
+            _ = try await fixture.tools.refreshCatalog()
             Issue.record("expected an error")
         } catch let error as ToolError {
             #expect(error.message.contains("Amazon Photos app index not found"))
@@ -84,12 +84,12 @@ struct ToolsTests {
         }
     }
 
-    @Test func scanDriveIndexesTheDriveAndReportsWhatRemains() throws {
+    @Test func scanDriveIndexesTheDriveAndReportsWhatRemains() async throws {
         let fixture = try ToolsFixture(driveSubpath: "Backup", catalog: catalog)
         try fixture.drive.write("Backup/IMG_0001.jpg", "hello")
         try fixture.drive.write("Backup/IMG_0002.jpg", "world")
         try fixture.drive.write("Elsewhere/ignored.jpg", "nope")
-        _ = try fixture.tools.refreshCatalog()
+        _ = try await fixture.tools.refreshCatalog()
 
         let limited = try fixture.tools.scanDrive(limit: 1, retry: .none)
         #expect(limited.filesHashed == 1)
@@ -106,17 +106,17 @@ struct ToolsTests {
         #expect(metadataOnly.hashing == false)
         #expect(metadataOnly.filesHashed == 0)
 
-        let report = try fixture.tools.syncStatus(refresh: false)
+        let report = try await fixture.tools.syncStatus(refresh: false)
         #expect(report.scanSubpath == "Backup")
         #expect(report.driveHashedFiles == 2)
         #expect(report.driveMounted)
         #expect(report.lastScanAt != nil)
     }
 
-    @Test func listingFunctionsFollowTheConfiguredScope() throws {
+    @Test func listingFunctionsFollowTheConfiguredScope() async throws {
         let fixture = try ToolsFixture(driveSubpath: "Backup", catalog: catalog)
         try fixture.drive.write("Backup/IMG_0001.jpg", "hello")  // md5 of "hello" is not in the catalog
-        _ = try fixture.tools.refreshCatalog()
+        _ = try await fixture.tools.refreshCatalog()
         _ = try fixture.tools.scanDrive(retry: .none)
 
         let driveOnly = try fixture.tools.listDriveOnly(limit: 10)
@@ -131,9 +131,12 @@ struct ToolsTests {
 
     // MARK: Registry
 
-    @Test func definitionsDescribeTheSixToolsWithObjectSchemas() {
+    @Test func definitionsDescribeTheNineToolsWithObjectSchemas() {
         let names = RainbarrelToolRegistry.definitions.map(\.name)
-        #expect(names == ["sync_status", "list_online_only", "list_drive_only", "breakdown_by_year", "refresh_catalog", "scan_drive"])
+        #expect(names == [
+            "sync_status", "list_online_only", "list_drive_only", "breakdown_by_year", "refresh_catalog", "scan_drive",
+            "download_status", "download_batch", "organize_preview",
+        ])
         for definition in RainbarrelToolRegistry.definitions {
             #expect(!definition.description.isEmpty)
             guard case .object(let schema) = definition.inputSchema,
@@ -157,15 +160,15 @@ struct ToolsTests {
         #expect((try? JSONEncoder().encode(scan?.inputSchema)) != nil)
     }
 
-    @Test func registryRunsEveryToolWithoutATransport() throws {
+    @Test func registryRunsEveryToolWithoutATransport() async throws {
         let fixture = try ToolsFixture(catalog: catalog)
         try fixture.drive.write("IMG_0001.jpg", "hello")
         let registry = RainbarrelToolRegistry(tools: fixture.tools)
 
-        let refreshed = try decode(CatalogRefreshSummary.self, registry.call(name: "refresh_catalog", arguments: nil))
+        let refreshed = try decode(CatalogRefreshSummary.self, await registry.callAsync(name: "refresh_catalog", arguments: nil))
         #expect(refreshed.photosVideos.count == 2)
 
-        let status = try decode(SyncReport.self, registry.call(name: "sync_status", arguments: ["refresh": .bool(false)]))
+        let status = try decode(SyncReport.self, await registry.callAsync(name: "sync_status", arguments: ["refresh": .bool(false)]))
         #expect(status.photosVideos.count == 2)
         #expect(status.onlineOnly.count == 2)
 
@@ -182,9 +185,9 @@ struct ToolsTests {
         #expect(years.map(\.year) == [2015, 2019])
     }
 
-    @Test func registryClampsLimitsAndAcceptsWholeDoubles() throws {
+    @Test func registryClampsLimitsAndAcceptsWholeDoubles() async throws {
         let fixture = try ToolsFixture(catalog: catalog)
-        _ = try fixture.tools.refreshCatalog()
+        _ = try await fixture.tools.refreshCatalog()
         let registry = RainbarrelToolRegistry(tools: fixture.tools)
         let big = try decode(Page<OnlineOnlyItem>.self, registry.call(name: "list_online_only", arguments: ["limit": .int(100_000)]))
         #expect(big.limit == 500)
@@ -193,7 +196,7 @@ struct ToolsTests {
         #expect(small.items.count == 1)
     }
 
-    @Test func registryReportsBadInputAndFailuresAsToolErrors() throws {
+    @Test func registryReportsBadInputAndFailuresAsToolErrors() async throws {
         let fixture = try ToolsFixture(catalogError: CatalogError.indexNotFound("no index here"))
         let registry = RainbarrelToolRegistry(tools: fixture.tools)
 
@@ -212,10 +215,10 @@ struct ToolsTests {
         #expect(badFlag.isError)
 
         // Amazon index missing: a readable message, not a crash.
-        let refresh = registry.call(name: "refresh_catalog", arguments: nil)
+        let refresh = await registry.callAsync(name: "refresh_catalog", arguments: nil)
         #expect(refresh.isError)
         #expect(refresh.text.contains("Amazon Photos app index not found"))
-        let status = registry.call(name: "sync_status", arguments: ["refresh": .bool(true)])
+        let status = await registry.callAsync(name: "sync_status", arguments: ["refresh": .bool(true)])
         #expect(status.isError)
 
         // Drive not mounted.

@@ -125,6 +125,13 @@ struct CloudFixture {
             """, [id, name, kind, "[\"\(parent)\"]", assetType, createdDate, status, contentDate, ext, md5, size])
     }
 
+    /// A folder node; a nil parent writes the empty `parents` array of the root folder.
+    func insertFolder(id: String, name: String, parent: String?, status: String = "AVAILABLE") throws {
+        try database.run("""
+            INSERT INTO nodes(id, name, kind, parents, status) VALUES(?, ?, 'FOLDER', ?, ?)
+            """, [id, name, parent.map { "[\"\($0)\"]" } ?? "[]", status])
+    }
+
     /// A catalog that exercises every filter.
     static func standard(walMode: Bool = false) throws -> CloudFixture {
         let fixture = try CloudFixture(walMode: walMode)
@@ -159,13 +166,21 @@ struct CloudFixture {
 /// An in-memory catalog for tests that do not need the SQLite fixture.
 struct StaticCatalog: CloudCatalogSource {
     var items: [CloudItem]
+    var folders: [CloudFolder] = []
     var sourceName: String { "static" }
 
     func readCatalog(_ body: (CloudItem) throws -> Void) throws -> CatalogReadResult {
+        try readCatalog(folders: { _ in }, items: body)
+    }
+
+    func readCatalog(
+        folders folderBody: (CloudFolder) throws -> Void, items body: (CloudItem) throws -> Void
+    ) throws -> CatalogReadResult {
+        for folder in folders { try folderBody(folder) }
         for item in items { try body(item) }
         return CatalogReadResult(
             sourceDescription: "static", sourceModifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            itemCount: items.count)
+            itemCount: items.count, folderCount: folders.count)
     }
 }
 
@@ -186,12 +201,13 @@ struct ToolsFixture {
         drive = try TempDirectory()
         let paths = AppPaths(dataDirectory: home.url.appendingPathComponent("data", isDirectory: true))
         let source = StaticCatalog(items: catalog)
-        tools = RainbarrelTools(paths: paths) { _ in
+        tools = RainbarrelTools(paths: paths, catalogSource: { _ in
             if let catalogError { throw catalogError }
             return source
-        }
+        }, sessionStore: MemorySessionStore())
         if configureDrive {
-            try tools.saveConfig(Config(driveRoot: drive.path, scanSubpath: driveSubpath))
+            // These tests are about the app index; the web API has its own tests.
+            try tools.saveConfig(Config(driveRoot: drive.path, scanSubpath: driveSubpath, catalogSource: .app))
         }
     }
 }

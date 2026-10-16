@@ -41,6 +41,15 @@ public enum MetaKey {
     public static let catalogSourceModifiedAt = "catalog_source_modified_at"
     public static let catalogItemCount = "catalog_item_count"
     public static let catalogSource = "catalog_source"
+    public static let catalogFolderCount = "catalog_folder_count"
+    /// `app` or `web`: the source that produced the stored catalog (see `CatalogOrigin`).
+    public static let catalogOrigin = "catalog_origin"
+    /// JSON of the change-feed position of the stored web catalog (see `CatalogCheckpoint`).
+    public static let catalogCheckpoint = "catalog_checkpoint"
+    /// JSON of the last download run (see `DownloadRunRecord`).
+    public static let downloadLastRun = "download_last_run"
+    /// Prefix of the per-day counters of downloaded bytes; the local date (yyyy-MM-dd) follows.
+    public static let downloadBytesPrefix = "download_bytes_"
 }
 
 /// The tool's own database (`state.sqlite`): the cloud catalog, the drive index, metadata and scan history.
@@ -84,6 +93,25 @@ public final class StateStore {
                 seen_at   INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_cloud_items_md5 ON cloud_items(md5);
+            CREATE TABLE IF NOT EXISTS cloud_folders(
+                node_id   TEXT PRIMARY KEY,
+                name      TEXT NOT NULL,
+                parent_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS download_jobs(
+                node_id         TEXT PRIMARY KEY,
+                kind            TEXT NOT NULL,
+                md5             TEXT NOT NULL,
+                size            INTEGER NOT NULL,
+                taken_at        INTEGER NOT NULL DEFAULT 0,
+                target_rel_path TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                attempts        INTEGER NOT NULL DEFAULT 0,
+                last_error      TEXT,
+                updated_at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_download_jobs_queue ON download_jobs(status, taken_at);
+            CREATE INDEX IF NOT EXISTS idx_download_jobs_md5 ON download_jobs(md5);
             CREATE TABLE IF NOT EXISTS drive_files(
                 rel_path   TEXT PRIMARY KEY,
                 size       INTEGER NOT NULL,
@@ -93,6 +121,20 @@ public final class StateStore {
                 last_error TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_drive_files_md5 ON drive_files(md5);
+            CREATE TABLE IF NOT EXISTS organize_moves(
+                run_id    INTEGER NOT NULL,
+                from_path TEXT NOT NULL,
+                to_path   TEXT NOT NULL,
+                moved_at  INTEGER NOT NULL,
+                size      INTEGER,
+                mtime     INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_organize_moves_run ON organize_moves(run_id);
+            CREATE TABLE IF NOT EXISTS organize_dirs(
+                run_id INTEGER NOT NULL,
+                path   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_organize_dirs_run ON organize_dirs(run_id);
             CREATE TABLE IF NOT EXISTS meta(
                 key   TEXT PRIMARY KEY,
                 value TEXT
@@ -136,9 +178,12 @@ public final class StateStore {
 
     /// Sink handed to the catalog fill closure; call it once per item.
     public typealias CloudItemSink = (CloudItem) throws -> Void
+    /// Sink for the folder tree; call it once per folder.
+    public typealias CloudFolderSink = (CloudFolder) throws -> Void
 
     /// Replace the whole `cloud_items` table in one transaction. `fill` receives a sink and
     /// returns the read result; when it throws, the previous catalog is left untouched.
+    /// The folder tree (`cloud_folders`) is not changed.
     ///
     /// The catalog is staged in a temporary table first, so reading the (slow) source holds no lock
     /// on the state database; only the final swap is a short write transaction.
@@ -147,39 +192,167 @@ public final class StateStore {
         seenAt: Date = Date(),
         fill: (CloudItemSink) throws -> CatalogReadResult
     ) throws -> CatalogReadResult {
-        try database.execute("DROP TABLE IF EXISTS temp.cloud_items_staging")
+        try replaceCatalog(seenAt: seenAt, replaceFolders: false, origin: nil) { items, _ in
+            try withoutActuallyEscaping(items) { try fill($0) }
+        }
+    }
+
+    /// Like `replaceCloudItems`, and also replaces `cloud_folders` with the folders passed to the
+    /// second sink. With an `origin`, the swap also records where the catalog came from and replaces
+    /// the stored change-feed checkpoint with `result.checkpoint` (none clears it).
+    @discardableResult
+    public func replaceCloudCatalog(
+        seenAt: Date = Date(), origin: CatalogOrigin? = nil,
+        fill: (CloudItemSink, CloudFolderSink) throws -> CatalogReadResult
+    ) throws -> CatalogReadResult {
+        try replaceCatalog(seenAt: seenAt, replaceFolders: true, origin: origin, fill: fill)
+    }
+
+    /// `replaceCloudCatalog` for a source that suspends while it reads (the web API). `fill` gets the
+    /// staging area itself, so it can also take back a node it staged before. The staging transaction
+    /// stays open across the suspensions, so nothing else may use this store meanwhile. When `fill`
+    /// throws or the task is cancelled, the previous catalog is left untouched.
+    @discardableResult
+    public func replaceCloudCatalogAsync(
+        seenAt: Date = Date(), origin: CatalogOrigin? = nil,
+        fill: (CloudCatalogStaging) async throws -> CatalogReadResult
+    ) async throws -> CatalogReadResult {
+        try createStagingTables()
+        defer { dropStagingTables() }
+        let result: CatalogReadResult = try await database.transactionAsync(immediate: false) {
+            try await fill(try CloudCatalogStaging(database: database, seenAt: seenAt))
+        }
+        try swapStaging(seenAt: seenAt, replaceFolders: true, origin: origin, result: result)
+        return result
+    }
+
+    private func replaceCatalog(
+        seenAt: Date, replaceFolders: Bool, origin: CatalogOrigin?,
+        fill: (CloudItemSink, CloudFolderSink) throws -> CatalogReadResult
+    ) throws -> CatalogReadResult {
+        try createStagingTables()
+        defer { dropStagingTables() }
+        let result: CatalogReadResult = try database.transaction(immediate: false) {
+            let staging = try CloudCatalogStaging(database: database, seenAt: seenAt)
+            return try fill({ try staging.upsert($0) }, { try staging.upsert($0) })
+        }
+        try swapStaging(seenAt: seenAt, replaceFolders: replaceFolders, origin: origin, result: result)
+        return result
+    }
+
+    private func createStagingTables() throws {
+        try dropStagingTablesThrowing()
         try database.execute("""
             CREATE TEMP TABLE cloud_items_staging(
                 node_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT, md5 TEXT NOT NULL,
                 size INTEGER NOT NULL, taken_at INTEGER NOT NULL, ext TEXT, parent_id TEXT,
-                seen_at INTEGER NOT NULL)
+                seen_at INTEGER NOT NULL);
+            CREATE TEMP TABLE cloud_folders_staging(
+                node_id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT)
             """)
-        defer { try? database.execute("DROP TABLE IF EXISTS temp.cloud_items_staging") }
+    }
 
-        let seenAtSeconds = Int64(seenAt.timeIntervalSince1970)
-        let result: CatalogReadResult = try database.transaction(immediate: false) {
-            let insert = try database.prepare("""
-                INSERT OR REPLACE INTO temp.cloud_items_staging
-                    (node_id, kind, name, md5, size, taken_at, ext, parent_id, seen_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """)
-            return try fill { item in
-                try insert.run([
-                    item.nodeId, item.kind.rawValue, item.name, item.md5, item.size,
-                    item.takenAt, item.ext, item.parentId, seenAtSeconds,
-                ])
-            }
-        }
+    private func dropStagingTablesThrowing() throws {
+        try database.execute("DROP TABLE IF EXISTS temp.cloud_items_staging")
+        try database.execute("DROP TABLE IF EXISTS temp.cloud_folders_staging")
+    }
 
+    private func dropStagingTables() {
+        try? dropStagingTablesThrowing()
+    }
+
+    private func swapStaging(
+        seenAt: Date, replaceFolders: Bool, origin: CatalogOrigin?, result: CatalogReadResult
+    ) throws {
         try database.transaction {
             try database.execute("DELETE FROM cloud_items")
             try database.execute("INSERT INTO cloud_items SELECT * FROM temp.cloud_items_staging")
+            if replaceFolders {
+                try database.execute("DELETE FROM cloud_folders")
+                try database.execute("INSERT INTO cloud_folders SELECT * FROM temp.cloud_folders_staging")
+                try setMeta(MetaKey.catalogFolderCount, String(result.folderCount))
+            }
             try setMetaDate(MetaKey.catalogRefreshedAt, seenAt)
             try setMetaDate(MetaKey.catalogSourceModifiedAt, result.sourceModifiedAt)
             try setMeta(MetaKey.catalogItemCount, String(result.itemCount))
             try setMeta(MetaKey.catalogSource, result.sourceDescription)
+            if let origin {
+                try setMeta(MetaKey.catalogOrigin, origin.rawValue)
+                try setCatalogCheckpoint(result.checkpoint)
+            }
         }
-        return result
+    }
+
+    /// Apply the changes of Amazon's change feed to the stored catalog and move the checkpoint, in one
+    /// transaction. Returns the number of items and folders in the catalog afterwards.
+    @discardableResult
+    public func applyCatalogChanges(
+        _ changes: CatalogChangeSet, seenAt: Date, sourceModifiedAt: Date, sourceDescription: String,
+        origin: CatalogOrigin, checkpoint: CatalogCheckpoint?
+    ) throws -> (items: Int, folders: Int) {
+        let seenAtSeconds = Int64(seenAt.timeIntervalSince1970)
+        return try database.transaction {
+            let deleteItem = try database.prepare("DELETE FROM cloud_items WHERE node_id = ?")
+            let deleteFolder = try database.prepare("DELETE FROM cloud_folders WHERE node_id = ?")
+            for nodeId in changes.removed {
+                try deleteItem.run([nodeId])
+                try deleteFolder.run([nodeId])
+            }
+            let upsertItem = try database.prepare("""
+                INSERT OR REPLACE INTO cloud_items
+                    (node_id, kind, name, md5, size, taken_at, ext, parent_id, seen_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)
+            for item in changes.items.values {
+                try upsertItem.run([
+                    item.nodeId, item.kind.rawValue, item.name, item.md5, item.size,
+                    item.takenAt, item.ext, item.parentId, seenAtSeconds,
+                ])
+            }
+            let upsertFolder = try database.prepare(
+                "INSERT OR REPLACE INTO cloud_folders(node_id, name, parent_id) VALUES(?, ?, ?)")
+            for folder in changes.folders.values {
+                try upsertFolder.run([folder.nodeId, folder.name, folder.parentId])
+            }
+            let itemCount = try cloudItemCount()
+            let folderCount = try cloudFolderCount()
+            try setMeta(MetaKey.catalogFolderCount, String(folderCount))
+            try setMetaDate(MetaKey.catalogRefreshedAt, seenAt)
+            try setMetaDate(MetaKey.catalogSourceModifiedAt, sourceModifiedAt)
+            try setMeta(MetaKey.catalogItemCount, String(itemCount))
+            try setMeta(MetaKey.catalogSource, sourceDescription)
+            try setMeta(MetaKey.catalogOrigin, origin.rawValue)
+            try setCatalogCheckpoint(checkpoint)
+            return (itemCount, folderCount)
+        }
+    }
+
+    // MARK: catalog origin and checkpoint
+
+    /// Which source produced the stored catalog; nil for a catalog that was never refreshed.
+    public func catalogOrigin() throws -> CatalogOrigin? {
+        try getMeta(MetaKey.catalogOrigin).flatMap { CatalogOrigin(rawValue: $0) }
+    }
+
+    /// The stored change-feed checkpoint; nil when there is none or it cannot be read.
+    public func catalogCheckpoint() throws -> CatalogCheckpoint? {
+        guard let text = try getMeta(MetaKey.catalogCheckpoint) else { return nil }
+        return try? JSONDecoder().decode(CatalogCheckpoint.self, from: Data(text.utf8))
+    }
+
+    /// Store a checkpoint, or clear it with nil.
+    public func setCatalogCheckpoint(_ checkpoint: CatalogCheckpoint?) throws {
+        guard let checkpoint else {
+            try setMeta(MetaKey.catalogCheckpoint, nil)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        try setMeta(MetaKey.catalogCheckpoint, String(decoding: try encoder.encode(checkpoint), as: UTF8.self))
+    }
+
+    public func cloudFolderCount() throws -> Int {
+        Int(try database.scalarInt64("SELECT COUNT(*) FROM cloud_folders") ?? 0)
     }
 
     public func cloudItemCount() throws -> Int {
@@ -312,5 +485,65 @@ public final class StateStore {
         guard let seconds = try database.scalarInt64(
             "SELECT MAX(COALESCE(finished_at, started_at)) FROM scans") else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(seconds))
+    }
+}
+
+/// The temporary tables a catalog replacement is built in. A node id has at most one row and the
+/// last call about it wins, so a source may hand over a node every time it sees it. The stored
+/// catalog is not touched until the replacement swaps the tables in.
+public struct CloudCatalogStaging {
+    private let database: SQLiteDatabase
+    private let insertItem: SQLiteStatement
+    private let insertFolder: SQLiteStatement
+    private let deleteItem: SQLiteStatement
+    private let deleteFolder: SQLiteStatement
+    private let seenAt: Int64
+
+    init(database: SQLiteDatabase, seenAt: Date) throws {
+        self.database = database
+        self.seenAt = Int64(seenAt.timeIntervalSince1970)
+        insertItem = try database.prepare("""
+            INSERT OR REPLACE INTO temp.cloud_items_staging
+                (node_id, kind, name, md5, size, taken_at, ext, parent_id, seen_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)
+        insertFolder = try database.prepare("""
+            INSERT OR REPLACE INTO temp.cloud_folders_staging(node_id, name, parent_id)
+            VALUES(?, ?, ?)
+            """)
+        deleteItem = try database.prepare("DELETE FROM temp.cloud_items_staging WHERE node_id = ?")
+        deleteFolder = try database.prepare("DELETE FROM temp.cloud_folders_staging WHERE node_id = ?")
+    }
+
+    public func upsert(_ item: CloudItem) throws {
+        try insertItem.run([
+            item.nodeId, item.kind.rawValue, item.name, item.md5, item.size, item.takenAt, item.ext,
+            item.parentId, seenAt,
+        ])
+    }
+
+    public func upsert(_ folder: CloudFolder) throws {
+        try insertFolder.run([folder.nodeId, folder.name, folder.parentId])
+    }
+
+    /// Forget a node that was staged earlier (it was trashed or purged since).
+    public func remove(_ nodeId: String) throws {
+        try deleteItem.run([nodeId])
+        try deleteFolder.run([nodeId])
+    }
+
+    /// Forget everything staged so far.
+    public func removeAll() throws {
+        try database.execute("DELETE FROM temp.cloud_items_staging")
+        try database.execute("DELETE FROM temp.cloud_folders_staging")
+    }
+
+    /// What is staged right now: all items, the folders, and the items that are photo and video files.
+    public func counts() throws -> (items: Int, folders: Int, files: Int) {
+        let items = try database.scalarInt64("SELECT COUNT(*) FROM temp.cloud_items_staging") ?? 0
+        let folders = try database.scalarInt64("SELECT COUNT(*) FROM temp.cloud_folders_staging") ?? 0
+        let files = try database.scalarInt64(
+            "SELECT COUNT(*) FROM temp.cloud_items_staging WHERE kind = ?", [CloudItemKind.file.rawValue]) ?? 0
+        return (Int(items), Int(folders), Int(files))
     }
 }

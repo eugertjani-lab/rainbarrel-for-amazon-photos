@@ -113,6 +113,52 @@ public enum DisplayFormat {
     }
 
     public static func shortMD5(_ md5: String) -> String { String(md5.prefix(8)) }
+
+    // MARK: Download progress
+
+    /// A transfer speed in decimal units: 14_200_000 -> "14.2 MB/s", 0 -> "0 KB/s".
+    public static func speed(bytesPerSecond: Double) -> String {
+        guard bytesPerSecond.isFinite, bytesPerSecond > 0 else { return "0 KB/s" }
+        let text = bytesShort(Int64(min(bytesPerSecond, 9e18)))
+        return text + "/s"
+    }
+
+    /// How long a transfer still takes, as a short phrase: "less than a minute left", "about 35 min
+    /// left", "about 2 h 5 min left". Nil when the speed is unknown or nothing is left.
+    public static func timeRemaining(bytesLeft: Int64, bytesPerSecond: Double) -> String? {
+        guard bytesLeft > 0, bytesPerSecond.isFinite, bytesPerSecond > 0 else { return nil }
+        let seconds = Double(bytesLeft) / bytesPerSecond
+        guard seconds.isFinite else { return nil }
+        if seconds < 60 { return "less than a minute left" }
+        let minutes = Int((seconds / 60).rounded())
+        if minutes < 60 { return "about \(minutes) min left" }
+        let hours = minutes / 60
+        if hours >= 48 { return "about \(hours / 24) d left" }
+        let rest = minutes % 60
+        return rest == 0 ? "about \(hours) h left" : "about \(hours) h \(rest) min left"
+    }
+
+    /// A file name that is safe to put in a window: control characters and the invisible characters
+    /// that reorder text are removed, and a name longer than `maxLength` characters is shortened in
+    /// the middle so that the start and the extension stay visible.
+    public static func displayFileName(_ name: String, maxLength: Int = 48) -> String {
+        let hidden: Set<UInt32> = [
+            0x061C, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0xFEFF,
+        ]
+        var cleaned = String.UnicodeScalarView()
+        for scalar in name.unicodeScalars {
+            let value = scalar.value
+            if value < 0x20 || (0x7F...0x9F).contains(value) || hidden.contains(value)
+                || (0x202A...0x202E).contains(value) || (0x2066...0x2069).contains(value)
+            { continue }
+            cleaned.append(scalar)
+        }
+        let text = String(cleaned)
+        guard maxLength >= 8, text.count > maxLength else { return text }
+        let keepEnd = min(14, maxLength / 3)
+        let keepStart = maxLength - keepEnd - 1
+        return String(text.prefix(keepStart)) + "…" + String(text.suffix(keepEnd))
+    }
 }
 
 extension String {
