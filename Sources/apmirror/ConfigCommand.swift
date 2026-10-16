@@ -16,16 +16,16 @@ struct ConfigCommand: ParsableCommand {
         func run() throws {
             let paths = AppPaths.default()
             let config = try ConfigStore(url: paths.configURL).load()
-            print("Data directory:   \(paths.dataDirectory.path)")
-            print("Config file:      \(paths.configURL.path)")
-            print("State database:   \(paths.stateURL.path)")
-            print("driveRoot:        \(config.driveRoot ?? "(not set)")")
-            print("scanSubpath:      \(config.scanSubpath ?? "(not set)")")
+            print("Data directory:   \(paths.dataDirectory.path.sanitizedForTerminal)")
+            print("Config file:      \(paths.configURL.path.sanitizedForTerminal)")
+            print("State database:   \(paths.stateURL.path.sanitizedForTerminal)")
+            print("driveRoot:        \((config.driveRoot ?? "(not set)").sanitizedForTerminal)")
+            print("scanSubpath:      \((config.scanSubpath ?? "(not set)").sanitizedForTerminal)")
             if let explicit = config.amazonIndexPath {
-                print("amazonIndexPath:  \(explicit)")
+                print("amazonIndexPath:  \(explicit.sanitizedForTerminal)")
             } else {
                 let detected = (try? AmazonAppIndexSource.resolve(explicitPath: nil))?.indexPath
-                print("amazonIndexPath:  (auto-detect)\(detected.map { " -> " + $0 } ?? " -> not found")")
+                print("amazonIndexPath:  (auto-detect)\((detected.map { " -> " + $0 } ?? " -> not found").sanitizedForTerminal)")
             }
         }
     }
@@ -52,8 +52,8 @@ struct ConfigCommand: ParsableCommand {
             if !FileManager.default.fileExists(atPath: config.driveRoot!, isDirectory: &isDirectory) {
                 printError("Note: \(config.driveRoot!) does not exist right now; the setting is saved anyway.")
             }
-            print("driveRoot:   \(config.driveRoot!)")
-            print("scanSubpath: \(config.scanSubpath ?? "(not set)")")
+            print("driveRoot:   \(config.driveRoot!.sanitizedForTerminal)")
+            print("scanSubpath: \((config.scanSubpath ?? "(not set)").sanitizedForTerminal)")
         }
     }
 
@@ -75,7 +75,7 @@ struct ConfigCommand: ParsableCommand {
             var config = try store.load()
             config.amazonIndexPath = resolved
             try store.save(config)
-            print("amazonIndexPath: \(resolved)")
+            print("amazonIndexPath: \(resolved.sanitizedForTerminal)")
         }
     }
 }

@@ -35,7 +35,7 @@ struct Status: ParsableCommand {
         print("PhotoMirror status")
         row("Catalog as of:", "\(Format.dateTime(report.catalogFreshness)) (\(Format.age(of: report.catalogFreshness)))")
         row("Catalog refreshed:", Format.dateTime(report.catalogRefreshedAt))
-        row("Drive:", (report.driveRoot ?? "(not configured)") + (report.scanSubpath.map { " / " + $0 } ?? ""))
+        row("Drive:", ((report.driveRoot ?? "(not configured)") + (report.scanSubpath.map { " / " + $0 } ?? "")).sanitizedForTerminal)
         row("Drive mounted:", report.driveMounted ? "yes" : "no")
         row("Last drive scan:", Format.dateTime(report.lastScanAt))
         print("")
@@ -118,7 +118,7 @@ struct OnlineOnly: ParsableCommand {
             return
         }
         for item in page.items {
-            print("  \(Format.day(unix: item.takenAt))  \(Format.bytes(item.size).leftPadded(10))  \(item.name)  [\(Format.shortMD5(item.md5))]")
+            print("  \(Format.day(unix: item.takenAt))  \(Format.bytes(item.size).leftPadded(10))  \(item.name.sanitizedForTerminal)  [\(Format.shortMD5(item.md5))]")
         }
         let shown = offset + page.items.count
         if shown < page.total {
@@ -159,7 +159,7 @@ struct DriveOnly: ParsableCommand {
             return
         }
         for item in page.items {
-            print("  \(Format.bytes(item.size).leftPadded(10))  \(item.relPath)  [\(Format.shortMD5(item.md5))]")
+            print("  \(Format.bytes(item.size).leftPadded(10))  \(item.relPath.sanitizedForTerminal)  [\(Format.shortMD5(item.md5))]")
         }
         let shown = offset + page.items.count
         if shown < page.total {

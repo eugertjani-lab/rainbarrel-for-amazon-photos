@@ -18,7 +18,7 @@ final class ProgressPrinter {
             + "  \(Format.bytes(progress.bytesHashed))  errors \(progress.errors)  "
         if interactive {
             let width = max(40, Int(ProcessInfo.processInfo.environment["COLUMNS"] ?? "") ?? 100)
-            var path = progress.currentPath ?? ""
+            var path = (progress.currentPath ?? "").sanitizedForTerminal
             let room = width - prefix.count - 1
             if room > 3, path.count > room { path = "..." + path.suffix(room - 3) } else if room <= 3 { path = "" }
             FileHandle.standardError.write(Data(("\r" + prefix + path + "\u{1B}[K").utf8))
@@ -78,7 +78,7 @@ struct Scan: ParsableCommand {
         print("  Files hashed:    \(Format.number(result.filesHashed))  (\(Format.bytes(result.bytesHashed)))")
         print("  Seed hashes kept (mtime filled in): \(Format.number(result.filesAdopted))")
         print("  Errors:          \(Format.number(result.errors))")
-        for line in result.directoryErrors.prefix(10) { print("    directory: \(line)") }
+        for line in result.directoryErrors.prefix(10) { print("    directory: \(line.sanitizedForTerminal)") }
         if result.directoryErrors.count > 10 { print("    ... and \(result.directoryErrors.count - 10) more") }
     }
 }

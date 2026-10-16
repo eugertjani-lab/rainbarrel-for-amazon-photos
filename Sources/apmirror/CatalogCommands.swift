@@ -12,7 +12,7 @@ struct RefreshCatalog: ParsableCommand {
         let context = try AppContext.open()
         let result = try context.refreshCatalog()
         let report = try context.reconciler().report(driveRoot: context.config.driveRoot)
-        print("Catalog refreshed from \(result.sourceDescription)")
+        print("Catalog refreshed from \(result.sourceDescription.sanitizedForTerminal)")
         print("  Photos and videos:  \(Format.number(report.photosVideos.count))  (\(Format.bytes(report.photosVideos.bytes)))")
         print("  Distinct MD5s:      \(Format.number(report.distinctMD5))")
         print("  Live Photo videos:  \(Format.number(report.liveVideos.count))  (\(Format.bytes(report.liveVideos.bytes)))")

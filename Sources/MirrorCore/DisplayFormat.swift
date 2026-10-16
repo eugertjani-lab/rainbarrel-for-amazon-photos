@@ -78,3 +78,28 @@ public enum DisplayFormat {
 
     public static func shortMD5(_ md5: String) -> String { String(md5.prefix(8)) }
 }
+
+extension String {
+    /// The text with every control character replaced by a visible escape such as `\u{1B}`, so a
+    /// file name taken from the drive or the catalog cannot move the cursor, change colours or
+    /// otherwise drive the terminal it is printed to. Covers C0 controls (U+0000 to U+001F),
+    /// DEL (U+007F) and C1 controls (U+0080 to U+009F); everything else, including non-ASCII
+    /// letters and emoji, passes through unchanged. Use it for plain-text output only: JSON
+    /// escapes control characters by itself.
+    public var sanitizedForTerminal: String {
+        func isControl(_ scalar: Unicode.Scalar) -> Bool {
+            scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value)
+        }
+        guard unicodeScalars.contains(where: isControl) else { return self }
+        var result = ""
+        for scalar in unicodeScalars {
+            if isControl(scalar) {
+                let hex = String(scalar.value, radix: 16, uppercase: true)
+                result += "\\u{" + (hex.count < 2 ? "0" + hex : hex) + "}"
+            } else {
+                result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
+    }
+}
