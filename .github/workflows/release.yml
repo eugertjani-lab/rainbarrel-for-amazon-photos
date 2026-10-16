@@ -58,6 +58,9 @@ jobs:
     name: Linux build
     runs-on: ubuntu-latest
     container: swift:6.2
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
