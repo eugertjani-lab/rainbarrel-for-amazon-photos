@@ -167,8 +167,8 @@ struct ScannerTests {
         #expect(try relPaths(store) == ["Backup/IMG_0001.jpg"])
     }
 
-    @Test func unreadableFileIsRecordedWithAnErrorAndTheScanContinues() throws {
-        try #require(getuid() != 0, "permissions are not enforced for root")
+    @Test(.enabled(if: getuid() != 0, "file permissions are not enforced for root, e.g. in CI containers"))
+    func unreadableFileIsRecordedWithAnErrorAndTheScanContinues() throws {
         let drive = try TempDirectory()
         try drive.write("a-good.jpg", "hello")
         let bad = try drive.write("b-bad.jpg", "world")
