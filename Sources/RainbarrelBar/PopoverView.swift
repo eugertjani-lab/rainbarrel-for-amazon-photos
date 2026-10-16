@@ -9,6 +9,7 @@ struct PopoverView: View {
     var quit: () -> Void = { NSApplication.shared.terminate(nil) }
 
     @State private var showingYears: Bool
+    @State private var contentHeight: CGFloat = 0
     @Environment(\.isSnapshot) private var isSnapshot
 
     /// The panel never grows taller than this; longer content scrolls. It follows the screen, within
@@ -36,11 +37,25 @@ struct PopoverView: View {
                 // ImageRenderer cannot draw an AppKit scroll view, so snapshots show the full content.
                 content
             } else {
-                ScrollView { content }
-                    .frame(maxHeight: Self.maxHeight)
+                // A menu-bar window takes the ideal height of its content, and a scroll view has
+                // almost none, so the panel opened as a thin strip. The scroll view gets the measured
+                // height of the content instead, up to the maximum.
+                ScrollView {
+                    content.background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                        })
+                }
+                .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+                .frame(height: min(max(contentHeight, 1), Self.maxHeight))
             }
         }
         .frame(width: 360)
+    }
+
+    private struct ContentHeightKey: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
     }
 
     private var content: some View {
