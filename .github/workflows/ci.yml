@@ -32,9 +32,11 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .build
-          key: ${{ runner.os }}-${{ runner.arch }}-spm-${{ hashFiles('Package.resolved') }}
+          # The repo name is part of the key: .build holds absolute paths, so a cache from
+          # before a rename (or from another checkout path) breaks the module cache.
+          key: ${{ github.event.repository.name }}-${{ runner.os }}-${{ runner.arch }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-spm-
+            ${{ github.event.repository.name }}-${{ runner.os }}-${{ runner.arch }}-spm-
 
       - name: Build (release)
         run: swift build -c release
@@ -72,9 +74,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-${{ hashFiles('Package.resolved') }}
+          key: ${{ github.event.repository.name }}-${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-
+            ${{ github.event.repository.name }}-${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-
 
       - name: Build rainbarrel (release)
         run: swift build -c release --product rainbarrel
