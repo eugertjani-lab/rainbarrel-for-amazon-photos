@@ -42,6 +42,27 @@ public enum DisplayFormat {
         return String(format: "%.2f", amount) + " " + units[unit]
     }
 
+    /// Decimal units with at most one decimal and no trailing ".0": 1_400_000_000_000 -> "1.4 TB",
+    /// 5_000_000_000_000 -> "5 TB", 612_000_000 -> "612 MB".
+    public static func bytesShort(_ value: Int64) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+        if abs(value) < 1000 { return "\(value) B" }
+        var amount = Double(value)
+        var unit = 0
+        while abs(amount) >= 1000, unit < units.count - 1 {
+            amount /= 1000
+            unit += 1
+        }
+        // 999.96 rounds to 1000.0, which belongs in the next unit.
+        if abs((amount * 10).rounded() / 10) >= 1000, unit < units.count - 1 {
+            amount /= 1000
+            unit += 1
+        }
+        let rounded = (amount * 10).rounded() / 10
+        let text = rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
+        return text + " " + units[unit]
+    }
+
     public static func percent(_ fraction: Double?) -> String {
         guard let fraction else { return "n/a" }
         return String(format: "%.1f%%", fraction * 100)
@@ -59,6 +80,21 @@ public enum DisplayFormat {
     public static func dateTime(_ date: Date?) -> String {
         guard let date else { return "never" }
         return formatter("yyyy-MM-dd HH:mm", utc: false).string(from: date)
+    }
+
+    /// When something happened, short: "22:33" for today, "2026-10-14 22:33" for any other day.
+    public static func timeOrDate(_ date: Date?, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let date else { return "never" }
+        if calendar.isDate(date, inSameDayAs: now) {
+            let formatter = formatter("HH:mm", utc: false)
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            return formatter.string(from: date)
+        }
+        let formatter = formatter("yyyy-MM-dd HH:mm", utc: false)
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        return formatter.string(from: date)
     }
 
     /// Capture date (UTC) from Unix seconds.

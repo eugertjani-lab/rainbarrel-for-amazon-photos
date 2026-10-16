@@ -40,9 +40,13 @@ final class ProgressThrottle: @unchecked Sendable {
 /// What the menu-bar label shows.
 enum BarState: Equatable {
     case loading
-    case scanning(filesSeen: Int)
+    /// A scan is running. The scanner does not know the total number of files in advance, so there
+    /// is no percentage to show.
+    case scanning
+    /// The drive is not mounted, the catalog cannot be read, or a refresh or scan failed.
     case warning
     case synced
+    /// Photos, videos and Live Photo videos that exist only in the cloud.
     case onlineOnly(Int)
 }
 
@@ -82,15 +86,18 @@ final class AppModel {
     // MARK: Derived state
 
     var barState: BarState {
-        if isScanning { return .scanning(filesSeen: scanProgress?.filesSeen ?? 0) }
+        if isScanning { return .scanning }
         guard let report else { return loadError != nil ? .warning : .loading }
-        if !report.driveMounted { return .warning }
-        return report.onlineOnly.count == 0 ? .synced : .onlineOnly(report.onlineOnly.count)
+        if !report.driveMounted || loadError != nil || scanError != nil { return .warning }
+        let onlineOnly = report.onlineOnly.count + report.liveVideosOnlineOnly.count
+        return onlineOnly == 0 ? .synced : .onlineOnly(onlineOnly)
     }
 
+    /// The volume's own name while it is mounted, otherwise a name taken from the configured path.
     var driveName: String {
+        if let name = report?.driveSpace?.volumeName { return name }
         guard let root = report?.driveRoot ?? config.driveRoot, !root.isEmpty else { return "No drive set" }
-        return URL(fileURLWithPath: root).lastPathComponent
+        return DriveSpace.volumeName(forPath: root)
     }
 
     // MARK: Lifecycle

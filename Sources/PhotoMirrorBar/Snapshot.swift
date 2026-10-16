@@ -2,11 +2,12 @@ import AppKit
 import MirrorCore
 import SwiftUI
 
-/// `PhotoMirrorBar --render-snapshot out.png [--dark]`: draws the popover with the real current
-/// report through `ImageRenderer` at 2x and exits. Used to check the layout without clicking.
+/// `PhotoMirrorBar --render-snapshot out.png [--dark] [--years]`: draws the popover (or, with
+/// `--years`, the year map) with the real current report through `ImageRenderer` at 2x and exits.
+/// Used to check the layout without clicking.
 @MainActor
 enum SnapshotRenderer {
-    static func run(output: String, dark: Bool) -> Never {
+    static func run(output: String, dark: Bool, years: Bool) -> Never {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let tools = MirrorTools()
@@ -25,7 +26,7 @@ enum SnapshotRenderer {
         (NSApp.appearance ?? NSAppearance.currentDrawing()).performAsCurrentDrawingAppearance {
             background = Color(cgColor: NSColor.windowBackgroundColor.cgColor)
         }
-        let content = PopoverView(model: model)
+        let content = PopoverView(model: model, showYears: years)
             .environment(\.isSnapshot, true)
             .environment(\.colorScheme, dark ? .dark : .light)
             .background(background)
@@ -50,7 +51,7 @@ enum SnapshotRenderer {
             FileHandle.standardError.write(Data("Could not write \(output): \(error)\n".utf8))
             exit(1)
         }
-        print("Wrote \(output) (\(image.width)x\(image.height) px, \(dark ? "dark" : "light"))")
+        print("Wrote \(output) (\(image.width)x\(image.height) px, \(dark ? "dark" : "light")\(years ? ", years" : ""))")
         exit(0)
     }
 }

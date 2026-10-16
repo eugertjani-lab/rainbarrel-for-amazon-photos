@@ -13,7 +13,8 @@ enum Launcher {
             }
             let output = arguments[index + 1]
             let dark = arguments.contains("--dark")
-            MainActor.assumeIsolated { SnapshotRenderer.run(output: output, dark: dark) }
+            let years = arguments.contains("--years")
+            MainActor.assumeIsolated { SnapshotRenderer.run(output: output, dark: dark, years: years) }
         }
         PhotoMirrorBarApp.main()
     }

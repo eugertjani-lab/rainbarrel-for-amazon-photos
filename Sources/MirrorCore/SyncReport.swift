@@ -31,6 +31,9 @@ public struct SyncReport: Codable, Sendable, Equatable {
     /// every cloud node with the same MD5.
     public var inSync: CountBytes
     public var onlineOnly: CountBytes
+    /// Space a full mirror still needs: the sizes of the online-only photos, videos and Live Photo
+    /// videos, counting each distinct MD5 once (duplicates in the cloud need one drive copy).
+    public var onlineOnlyDistinctBytes: Int64
 
     // Live Photo videos (not part of the photo/video totals)
     public var liveVideos: CountBytes
@@ -56,6 +59,8 @@ public struct SyncReport: Codable, Sendable, Equatable {
     public var scanSubpath: String?
     public var driveMounted: Bool
     public var lastScanAt: Date?
+    /// Capacity of the drive's volume; nil when the drive is not mounted or the volume reports none.
+    public var driveSpace: DriveSpace?
 
     /// Share of cloud photos and videos that are backed up, 0...1 (nil when the cloud is empty).
     public var inSyncFraction: Double? {

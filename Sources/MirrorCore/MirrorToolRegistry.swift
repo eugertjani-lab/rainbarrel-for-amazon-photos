@@ -54,8 +54,10 @@ public struct MirrorToolRegistry: Sendable {
             description: """
                 Compare the Amazon Photos cloud catalog with the backup drive, by MD5, and return the full \
                 report as JSON: photo and video totals, how many are in sync (a copy exists on the drive), \
-                online only, Live Photo videos split the same way, drive-only files, unhashed and errored \
-                drive files, a per-year table, catalog freshness and whether the drive is mounted.
+                online only (with onlineOnlyDistinctBytes, the space a full mirror still needs), Live Photo \
+                videos split the same way, drive-only files, unhashed and errored drive files, a per-year \
+                table, catalog freshness, whether the drive is mounted and, when it is, its capacity \
+                (driveSpace).
                 """,
             inputSchema: schema([
                 "refresh": .object([

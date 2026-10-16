@@ -154,7 +154,7 @@ Drive
 
 `apmirror mcp` runs an MCP server on stdin and stdout, built on the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). The server is called `photomirror` and offers these tools:
 
-- `sync_status` returns the full report as JSON. The optional `refresh` argument re-reads the Amazon index first; by default that only happens when the last refresh is more than ten minutes old.
+- `sync_status` returns the full report as JSON. The optional `refresh` argument re-reads the Amazon index first; by default that only happens when the last refresh is more than ten minutes old. The report includes `onlineOnlyDistinctBytes` (the space a full mirror still needs, counting each distinct MD5 once) and, while the drive is mounted on macOS, `driveSpace` (volume name, total and available bytes).
 - `list_online_only` lists photos and videos that exist only in the cloud, with optional `year`, `limit` (default 50, at most 500) and `offset`.
 - `list_drive_only` lists hashed drive files that are in no cloud catalog, with `limit` and `offset`.
 - `breakdown_by_year` returns the per-year rows.
@@ -193,7 +193,9 @@ open build/PhotoMirror.app
 
 The script makes a release build, assembles `build/PhotoMirror.app` with an `Info.plist` (a menu-bar-only app, macOS 14 or later, version taken from the same constant as the command line tool) and signs it ad hoc. Because the signature is ad hoc, the app is meant for your own machine; distributing it would need a Developer ID signature and notarization.
 
-The menu-bar item shows a checkmark cloud when everything is backed up, a cloud with a down arrow and the online-only count (for example "147k") otherwise, a warning triangle when the drive is not mounted or the catalog cannot be read, and a progress symbol with a file count while a scan runs. The popover shows the in sync percentage, the main counts, the drive and catalog status, a per-year list, and buttons to refresh, scan the drive (with live progress and a Stop button), open the settings and quit. The settings window chooses the drive folder, the scan subpath and an optional Amazon index override, and opens the data folder.
+The menu-bar item shows a checkmark cloud when everything is backed up, a cloud with a down arrow and a compact count (for example "185k") of the photos, videos and Live Photo videos that exist only in the cloud, a progress symbol while a scan runs, and a drive with a warning badge when the drive is not mounted or the catalog cannot be read. The symbols are template images, so the system tints them for light and dark menu bars.
+
+The popover is 360 pt wide and follows the system appearance. It opens on a ring gauge with the in sync percentage and three figures (on your drive, only in the cloud, Live Photo videos), the five years with the most photos that are only in the cloud, a card with the drive's free space and whether a full mirror of the cloud would fit, and the catalog and scan status. A "Scan drive" button shows live progress and a Stop button while a scan runs, a refresh button re-reads the catalog, and a gear menu opens the settings, the data folder or quits. "All years" replaces the overview with a year map, one cell per year from 2000 on, with a blue fill for the share that is on the drive. The settings window chooses the drive folder, the scan subpath and an optional Amazon index override, and opens the data folder.
 
 The app loads the report at launch, refreshes it every ten minutes and whenever a volume is mounted or unmounted. All database and scan work runs off the main thread.
 
@@ -202,6 +204,8 @@ To check the layout without clicking, render the popover with your real numbers 
 ```sh
 build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-light.png
 build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-dark.png --dark
+build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-years-light.png --years
+build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-years-dark.png --years --dark
 ```
 
 ## Where PhotoMirror keeps its data

@@ -51,6 +51,13 @@ public struct Reconciler {
             CountBytes(count: (a?.count ?? 0) - (b?.count ?? 0), bytes: (a?.bytes ?? 0) - (b?.bytes ?? 0))
         }
 
+        // Duplicates in the cloud share one drive copy, so size each distinct MD5 once. A Live Photo
+        // video that has the same MD5 as a photo is the same bytes too.
+        let distinctBytes = try database.scalarInt64("""
+            SELECT COALESCE(SUM(size), 0) FROM (
+                SELECT MAX(c.size) AS size FROM cloud_items c WHERE \(notBackedUp) GROUP BY c.md5)
+            """) ?? 0
+
         let driveOnly = try database.rows("""
             SELECT COUNT(*), COALESCE(SUM(d.size), 0) FROM drive_files d
             WHERE d.md5 IS NOT NULL AND \(driveScope)
@@ -90,6 +97,7 @@ public struct Reconciler {
             distinctMD5: Int(distinct),
             inSync: backedUpTotals[file] ?? CountBytes(),
             onlineOnly: minus(totals[file], backedUpTotals[file]),
+            onlineOnlyDistinctBytes: distinctBytes,
             liveVideos: totals[live] ?? CountBytes(),
             liveVideosInSync: backedUpTotals[live] ?? CountBytes(),
             liveVideosOnlineOnly: minus(totals[live], backedUpTotals[live]),
@@ -103,7 +111,8 @@ public struct Reconciler {
             driveRoot: driveRoot,
             scanSubpath: scope.isWholeDrive ? nil : scope.directoryPath,
             driveMounted: mounted,
-            lastScanAt: try store.lastScanTime()
+            lastScanAt: try store.lastScanTime(),
+            driveSpace: mounted ? driveRoot.flatMap { DriveSpace.read(at: $0) } : nil
         )
     }
 

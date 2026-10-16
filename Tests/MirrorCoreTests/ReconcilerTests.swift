@@ -46,6 +46,53 @@ struct ReconcilerTests {
         #expect(abs(try #require(report.inSyncFraction) - 0.6) < 1e-9)
     }
 
+    @Test func distinctBytesCountEachMissingMD5Once() throws {
+        let (_, reconciler) = try makeScenario()
+        let report = try reconciler.report(driveRoot: nil)
+        // Online only: B (md5 2, 200 bytes), D (md5 4, 400) and the Live Photo video L2 (md5 6, 60).
+        #expect(report.onlineOnlyDistinctBytes == 660)
+    }
+
+    @Test func distinctBytesIgnoreDuplicatesAndAnythingAlreadyOnTheDrive() throws {
+        let store = try makeStore()
+        try CatalogRefresher(store: store).refresh(from: StaticCatalog(items: [
+            // md5 a exists three times in the cloud (two photos and a Live Photo video): 100 bytes once.
+            CloudItem(nodeId: "A1", kind: .file, name: "a.jpg", md5: md5("a"), size: 100, takenAt: t2019),
+            CloudItem(nodeId: "A2", kind: .file, name: "a copy.jpg", md5: md5("a"), size: 100, takenAt: t2019),
+            CloudItem(nodeId: "A3", kind: .liveVideo, name: "a_lpv", md5: md5("a"), size: 100, takenAt: t2019),
+            // md5 b is a duplicated Live Photo video: 50 bytes once.
+            CloudItem(nodeId: "B1", kind: .liveVideo, name: "b1_lpv", md5: md5("b"), size: 50, takenAt: t2019),
+            CloudItem(nodeId: "B2", kind: .liveVideo, name: "b2_lpv", md5: md5("b"), size: 50, takenAt: t2019),
+            // md5 c has a copy on the drive and does not count.
+            CloudItem(nodeId: "C1", kind: .file, name: "c.jpg", md5: md5("c"), size: 900, takenAt: t2020),
+            CloudItem(nodeId: "C2", kind: .file, name: "c copy.jpg", md5: md5("c"), size: 900, takenAt: t2020),
+        ]), now: Date(timeIntervalSince1970: 1_800_000_000))
+        try store.upsertDriveFile(DriveFileRecord(relPath: "Backup/c.jpg", size: 900, mtime: 1, md5: md5("c")))
+
+        let report = try Reconciler(store: store).report(driveRoot: nil)
+        #expect(report.onlineOnly.bytes == 200)
+        #expect(report.liveVideosOnlineOnly.bytes == 200)
+        #expect(report.onlineOnlyDistinctBytes == 150)
+    }
+
+    @Test func nothingMissingNeedsNoSpace() throws {
+        let report = try Reconciler(store: makeStore()).report(driveRoot: nil)
+        #expect(report.onlineOnlyDistinctBytes == 0)
+        #expect(report.driveSpace == nil)
+    }
+
+    @Test func reportCarriesTheDriveCapacityOnlyWhileMounted() throws {
+        let (_, reconciler) = try makeScenario()
+        let dir = try TempDirectory()
+        let missing = try reconciler.report(driveRoot: dir.path("missing"))
+        #expect(missing.driveSpace == nil)
+        #if os(macOS)
+        let mounted = try reconciler.report(driveRoot: dir.path)
+        #expect(mounted.driveMounted)
+        #expect(try #require(mounted.driveSpace).totalBytes > 0)
+        #endif
+    }
+
     @Test func driveOnlyUnhashedAndErrorCounts() throws {
         let (_, reconciler) = try makeScenario()
         let report = try reconciler.report(driveRoot: nil)
@@ -112,6 +159,7 @@ struct ReconcilerTests {
         let data = try SyncReport.makeEncoder().encode(report)
         let text = String(decoding: data, as: UTF8.self)
         #expect(text.contains("\"driveOnly\""))
+        #expect(text.contains("\"onlineOnlyDistinctBytes\" : 660"))
         #expect(text.contains("2027-01-15T08:01:40Z"))  // generatedAt as ISO 8601
 
         let decoder = JSONDecoder()
