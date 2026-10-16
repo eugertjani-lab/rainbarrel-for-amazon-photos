@@ -169,3 +169,23 @@ struct RingGauge: View {
         .accessibilityLabel("\(percentText) \(caption)")
     }
 }
+
+/// The one folder chooser the settings window and the panel share.
+@MainActor
+enum FolderPicker {
+    /// Runs an open panel for directories only and returns the chosen path, or nil when cancelled.
+    /// It starts at `path`, or at /Volumes when that is empty.
+    static func choose(
+        startingAt path: String, prompt: String, message: String? = nil, canCreateDirectories: Bool = false
+    ) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = canCreateDirectories
+        panel.prompt = prompt
+        if let message { panel.message = message }
+        panel.directoryURL = URL(fileURLWithPath: path.isEmpty ? "/Volumes" : path)
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+}

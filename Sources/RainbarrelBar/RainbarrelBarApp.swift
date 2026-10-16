@@ -44,9 +44,24 @@ final class BarAppDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
-    /// Opening the app again while it runs shows the panel in a normal window. The menu-bar icon
-    /// can be hidden (a full menu bar, the camera notch, or macOS menu bar settings), and this
-    /// keeps the app reachable.
+    /// Opening the app from the Finder or the Applications folder shows the panel in a normal
+    /// window, unless macOS started it as a login item. The menu-bar icon can be hidden (a full
+    /// menu bar, the camera notch, or macOS menu bar settings), and the window keeps the app
+    /// reachable. `RainbarrelBarApp.init` has already set `model` by the time this runs.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Offers the move first, and a relaunch from Applications then shows the window itself.
+        if MoveToApplications.offerIfNeeded() { return }
+        guard !Self.launchedAsLoginItem, Self.model != nil else { return }
+        showPanelWindow()
+    }
+
+    private static var launchedAsLoginItem: Bool {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        return event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue
+            == OSType(keyAELaunchedAsLogInItem)
+    }
+
+    /// Opening the app again while it runs shows the panel in a normal window.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPanelWindow()
         return false

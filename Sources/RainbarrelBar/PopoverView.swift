@@ -543,6 +543,20 @@ private struct PrimaryActionArea: View {
                         Text("Sign in again").font(.system(size: 14, weight: .semibold))
                     }
                     .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
+                case .noDriveSet:
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "externaldrive").foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("Choose the backup drive where Rainbarrel keeps your photos and videos.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Button { model.chooseDrive() } label: {
+                        Text("Choose Backup Drive…").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
                 case .driveMissing:
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "externaldrive").foregroundStyle(.secondary)
@@ -552,6 +566,10 @@ private struct PrimaryActionArea: View {
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
+                    Button { model.chooseDrive() } label: {
+                        Text("Choose Another Drive…").font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondaryFill))
                 case .driveReadOnly:
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)

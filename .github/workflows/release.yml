@@ -35,6 +35,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist stage
           ditto -c -k --keepParent build/Rainbarrel.app "dist/Rainbarrel-${TAG}-macos.zip"
+          scripts/build-dmg.sh --skip-build
+          cp build/Rainbarrel-*.dmg "dist/Rainbarrel-${TAG}-macos.dmg"
 
           BIN="$(swift build -c release --product rainbarrel --arch arm64 --arch x86_64 --show-bin-path)"
           cp "$BIN/rainbarrel" stage/rainbarrel
@@ -111,7 +113,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum Rainbarrel-*-macos.zip rainbarrel-*.tar.gz > SHA256SUMS.txt
+          sha256sum Rainbarrel-*-macos.zip Rainbarrel-*-macos.dmg rainbarrel-*.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create the GitHub release

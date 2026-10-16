@@ -162,6 +162,7 @@ final class AppModel {
         case .signedIn: break
         }
         if case .paused(let display) = download { return .paused(display) }
+        if (config.driveRoot ?? "").isEmpty { return .noDriveSet }
         guard let report else { return .none }
         if !report.driveMounted { return .driveMissing }
         if driveWritable == false { return .driveReadOnly }
@@ -344,6 +345,21 @@ final class AppModel {
             config = newConfig
             await reload(refreshCatalog: false)
         }
+    }
+
+    /// Asks for the backup drive (or a folder on it) and saves it as the drive root.
+    func chooseDrive() {
+        NSApp.activate(ignoringOtherApps: true)
+        let current = config.driveRoot ?? ""
+        guard let path = FolderPicker.choose(
+            startingAt: current,
+            prompt: "Use as Backup",
+            message: "Choose the backup drive, or a folder on it, where Rainbarrel keeps your photos and videos.",
+            canCreateDirectories: true)
+        else { return }
+        var stored = (try? tools.loadConfig()) ?? config
+        stored.driveRoot = path
+        saveConfig(stored)
     }
 
     // MARK: Amazon account
