@@ -73,9 +73,10 @@ final class BarAppDelegate: NSObject, NSApplicationDelegate {
     func showPanelWindow() {
         guard let model = Self.model else { return }
         if panelWindow == nil {
+            // The panel measures its own height, so the window follows the content like the menu-bar panel.
             let view = PopoverView(model: model, openSettings: { [weak self] in self?.showSettingsWindow() })
-                .frame(width: 360, height: 720)
-            panelWindow = Self.makeWindow(title: "Rainbarrel", content: view, size: NSSize(width: 360, height: 720))
+            panelWindow = Self.makeWindow(
+                title: "Rainbarrel", content: view, size: NSSize(width: 360, height: 480), fitsContent: true)
         }
         Self.bringForward(panelWindow)
     }
@@ -90,10 +91,15 @@ final class BarAppDelegate: NSObject, NSApplicationDelegate {
         Self.bringForward(settingsWindow)
     }
 
-    private static func makeWindow(title: String, content: some View, size: NSSize) -> NSWindow {
-        let window = NSWindow(contentViewController: NSHostingController(rootView: content))
+    private static func makeWindow(
+        title: String, content: some View, size: NSSize, fitsContent: Bool = false
+    ) -> NSWindow {
+        let controller = NSHostingController(rootView: content)
+        if fitsContent { controller.sizingOptions = [.preferredContentSize] }
+        let window = NSWindow(contentViewController: controller)
         window.title = title
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.styleMask = fitsContent
+            ? [.titled, .closable, .miniaturizable] : [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(size)
         window.isReleasedWhenClosed = false
         window.center()
