@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS
+    # Newest GitHub-hosted macOS image (Apple silicon). Its newest stable Xcode ships Swift 6.1 or newer.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select the newest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show the toolchain
+        run: swift --version
+
+      - name: Cache SwiftPM build products
+        uses: actions/cache@v6
+        with:
+          path: .build
+          key: ${{ runner.os }}-${{ runner.arch }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-spm-
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: swift test
+
+      - name: Build PhotoMirror.app
+        run: scripts/build-app.sh
+
+      - name: Zip PhotoMirror.app
+        run: ditto -c -k --keepParent build/PhotoMirror.app PhotoMirror-macos.zip
+
+      - name: Upload PhotoMirror.app
+        uses: actions/upload-artifact@v7
+        with:
+          name: PhotoMirror-macos
+          path: PhotoMirror-macos.zip
+          compression-level: 0
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install SQLite headers
+        run: apt-get update && apt-get install -y libsqlite3-dev
+
+      - name: Show the toolchain
+        run: swift --version
+
+      - name: Cache SwiftPM build products
+        uses: actions/cache@v6
+        with:
+          path: .build
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-
+
+      - name: Build apmirror (release)
+        run: swift build -c release --product apmirror
+
+      - name: Test
+        run: swift test

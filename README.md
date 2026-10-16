@@ -1,5 +1,8 @@
 # PhotoMirror
 
+[![CI](https://github.com/eugertjani-lab/amazon-photos-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/eugertjani-lab/amazon-photos-sync/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/eugertjani-lab/amazon-photos-sync?sort=semver)](https://github.com/eugertjani-lab/amazon-photos-sync/releases/latest)
+
 Sync your Amazon Photos back to your Mac so you always have a local backup, especially when several devices upload to Amazon Photos.
 
 PhotoMirror is a Swift package with three front ends on one shared library: a command line tool called `apmirror`, an MCP server (`apmirror mcp`) that lets an AI assistant ask about your backup, and a macOS menu-bar app. The current milestone is read-only monitoring. PhotoMirror compares the photos and videos in your Amazon Photos account with the files on a backup drive, by MD5, and reports which items are backed up, which exist only online and which exist only on the drive. Downloading the missing items and signing in to Amazon directly are planned for later milestones (see the roadmap).
@@ -38,6 +41,40 @@ Some drives, for example NTFS volumes mounted through macOS's FSKit driver, drop
 ### Several programs at once
 
 The command line tool, the MCP server and the menu-bar app can all use the same `state.sqlite`. The database runs in WAL mode with a 5 second busy timeout, readers never block, and write transactions are short: a catalog refresh reads the Amazon index into a temporary table first and only swaps it into place in one quick transaction.
+
+## Install
+
+### Download the app
+
+Download `PhotoMirror-<version>-macos.zip` from the [latest release](https://github.com/eugertjani-lab/amazon-photos-sync/releases/latest), unzip it and move `PhotoMirror.app` to your Applications folder. The release build is made on an Apple silicon runner and needs macOS 14 or later. PhotoMirror reads the local index of the Amazon Photos desktop app, so that app has to be installed and signed in on the same Mac.
+
+The app is ad-hoc signed and is not notarized by Apple, so macOS asks for confirmation on the first launch. Right-click `PhotoMirror.app`, choose Open and confirm the dialog. Newer macOS versions may show a dialog without an Open button; in that case use Open Anyway under System Settings, Privacy & Security. Alternatively, remove the quarantine flag that the download added and open the app normally:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/PhotoMirror.app
+```
+
+### Download the command line tool
+
+Each release also carries `apmirror-<version>-macos-universal.tar.gz` (Apple silicon and Intel, macOS 14 or later) and `apmirror-<version>-linux-x86_64.tar.gz`. Unpack the archive for your system and put `apmirror` somewhere on your `PATH`:
+
+```sh
+tar -xzf apmirror-<version>-macos-universal.tar.gz apmirror
+sudo mv apmirror /usr/local/bin/
+apmirror --version
+```
+
+A binary downloaded with a browser carries the quarantine flag as well; `xattr -d com.apple.quarantine apmirror` clears it. The Linux build links the Swift runtime dynamically and the system SQLite, so it needs a Swift 6 runtime and `libsqlite3` on the machine.
+
+Every release has a `SHA256SUMS.txt` file. To check the files you downloaded, run this in the folder that holds them:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+### Build from source
+
+Install a Swift 6.1 or newer toolchain, clone the repository and follow [Requirements and build](#requirements-and-build). In short, `swift build -c release` produces `.build/release/apmirror`, and `scripts/build-app.sh` produces `build/PhotoMirror.app`.
 
 ## Requirements and build
 

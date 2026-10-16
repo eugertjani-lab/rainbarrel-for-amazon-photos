@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS build
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select the newest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show the toolchain
+        run: swift --version
+
+      - name: Build PhotoMirror.app
+        run: scripts/build-app.sh
+
+      - name: Build apmirror for arm64 and x86_64
+        run: swift build -c release --product apmirror --arch arm64 --arch x86_64
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist stage
+          ditto -c -k --keepParent build/PhotoMirror.app "dist/PhotoMirror-${TAG}-macos.zip"
+
+          BIN="$(swift build -c release --product apmirror --arch arm64 --arch x86_64 --show-bin-path)"
+          cp "$BIN/apmirror" stage/apmirror
+          cp LICENSE stage/LICENSE
+          # A fat binary needs one signature that covers both slices; ad hoc is enough to run.
+          codesign --force --sign - --timestamp=none stage/apmirror
+          lipo -info stage/apmirror
+          stage/apmirror --version
+          tar -czf "dist/apmirror-${TAG}-macos-universal.tar.gz" -C stage apmirror LICENSE
+          ls -l dist
+
+      - name: Upload macOS files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+
+  linux:
+    name: Linux build
+    runs-on: ubuntu-latest
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install SQLite headers
+        run: apt-get update && apt-get install -y libsqlite3-dev
+
+      - name: Show the toolchain
+        run: swift --version
+
+      - name: Build apmirror (release)
+        run: swift build -c release --product apmirror
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist stage
+          cp "$(swift build -c release --product apmirror --show-bin-path)/apmirror" stage/apmirror
+          cp LICENSE stage/LICENSE
+          stage/apmirror --version
+          tar -czf "dist/apmirror-${TAG}-linux-$(uname -m).tar.gz" -C stage apmirror LICENSE
+          ls -l dist
+
+      - name: Upload Linux files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the build files
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Write checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum PhotoMirror-*-macos.zip apmirror-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<'NOTES'
+          PhotoMirror.app is ad-hoc signed and is not notarized by Apple. On first launch, right-click the app and choose Open, or clear the quarantine flag with `xattr -dr com.apple.quarantine PhotoMirror.app`. The app and the `apmirror` command line tool read the local index of the Amazon Photos desktop app, so that app must be installed and signed in on the same Mac.
+
+          Check a download against `SHA256SUMS.txt` with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
+
+          NOTES
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --generate-notes
