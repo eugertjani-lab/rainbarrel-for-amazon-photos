@@ -2,8 +2,8 @@
 import PackageDescription
 
 var products: [Product] = [
-    .library(name: "MirrorCore", targets: ["MirrorCore"]),
-    .executable(name: "apmirror", targets: ["apmirror"]),
+    .library(name: "RainbarrelCore", targets: ["RainbarrelCore"]),
+    .executable(name: "rainbarrel", targets: ["rainbarrel"]),
 ]
 
 var targets: [Target] = [
@@ -14,39 +14,39 @@ var targets: [Target] = [
         providers: [.apt(["libsqlite3-dev"])]
     ),
     .target(
-        name: "MirrorCore",
+        name: "RainbarrelCore",
         dependencies: [
             .target(name: "CSQLite", condition: .when(platforms: [.linux])),
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
         ]
     ),
     .executableTarget(
-        name: "apmirror",
+        name: "rainbarrel",
         dependencies: [
-            "MirrorCore",
+            "RainbarrelCore",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
             .product(name: "MCP", package: "swift-sdk"),
         ]
     ),
     .testTarget(
-        name: "MirrorCoreTests",
-        dependencies: ["MirrorCore"]
+        name: "RainbarrelCoreTests",
+        dependencies: ["RainbarrelCore"]
     ),
 ]
 
 #if os(macOS)
 // The menu-bar app is macOS only; Linux builds skip it.
-products.append(.executable(name: "PhotoMirrorBar", targets: ["PhotoMirrorBar"]))
+products.append(.executable(name: "RainbarrelBar", targets: ["RainbarrelBar"]))
 targets.append(
     .executableTarget(
-        name: "PhotoMirrorBar",
-        dependencies: ["MirrorCore"]
+        name: "RainbarrelBar",
+        dependencies: ["RainbarrelCore"]
     )
 )
 #endif
 
 let package = Package(
-    name: "PhotoMirror",
+    name: "Rainbarrel",
     platforms: [.macOS(.v14)],
     products: products,
     dependencies: [

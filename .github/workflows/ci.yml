@@ -42,17 +42,17 @@ jobs:
       - name: Test
         run: swift test
 
-      - name: Build PhotoMirror.app
+      - name: Build Rainbarrel.app
         run: scripts/build-app.sh
 
-      - name: Zip PhotoMirror.app
-        run: ditto -c -k --keepParent build/PhotoMirror.app PhotoMirror-macos.zip
+      - name: Zip Rainbarrel.app
+        run: ditto -c -k --keepParent build/Rainbarrel.app Rainbarrel-macos.zip
 
-      - name: Upload PhotoMirror.app
+      - name: Upload Rainbarrel.app
         uses: actions/upload-artifact@v7
         with:
-          name: PhotoMirror-macos
-          path: PhotoMirror-macos.zip
+          name: Rainbarrel-macos
+          path: Rainbarrel-macos.zip
           compression-level: 0
 
   linux:
@@ -76,8 +76,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swift-6.2-spm-
 
-      - name: Build apmirror (release)
-        run: swift build -c release --product apmirror
+      - name: Build rainbarrel (release)
+        run: swift build -c release --product rainbarrel
 
       - name: Test
         run: swift test

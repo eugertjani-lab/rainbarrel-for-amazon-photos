@@ -1,23 +1,25 @@
-# PhotoMirror
+# Rainbarrel for Amazon Photos
 
-[![CI](https://github.com/eugertjani-lab/amazon-photos-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/eugertjani-lab/amazon-photos-sync/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/eugertjani-lab/amazon-photos-sync?sort=semver)](https://github.com/eugertjani-lab/amazon-photos-sync/releases/latest)
+[![CI](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/actions/workflows/ci.yml/badge.svg)](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/eugertjani-lab/rainbarrel-for-amazon-photos?sort=semver)](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/releases/latest)
 
-Sync your Amazon Photos back to your Mac so you always have a local backup, especially when several devices upload to Amazon Photos.
+A verified local copy of your Amazon Photos library on your own drive.
 
-PhotoMirror is a Swift package with three front ends on one shared library: a command line tool called `apmirror`, an MCP server (`apmirror mcp`) that lets an AI assistant ask about your backup, and a macOS menu-bar app. The current milestone is read-only monitoring. PhotoMirror compares the photos and videos in your Amazon Photos account with the files on a backup drive, by MD5, and reports which items are backed up, which exist only online and which exist only on the drive. Downloading the missing items and signing in to Amazon directly are planned for later milestones (see the roadmap).
+Rainbarrel for Amazon Photos is an unofficial community project and is not affiliated with, endorsed by or supported by Amazon (see the [disclaimer](#disclaimer)). In short contexts, such as the app, the command line tool and the MCP server, it is called just Rainbarrel. The name is a picture of what it does: a rain barrel catches what falls from the cloud and keeps it at home, and it only fills.
+
+Rainbarrel is a Swift package with three front ends on one shared library: a command line tool called `rainbarrel`, an MCP server (`rainbarrel mcp`) that lets an AI assistant ask about your backup, and a macOS menu-bar app. The current milestone is read-only monitoring. Rainbarrel compares the photos and videos in your Amazon Photos account with the files on a backup drive, by MD5, and reports which items are backed up, which exist only online and which exist only on the drive. Downloading the missing items and signing in to Amazon directly are planned for later milestones (see the roadmap).
 
 ## Disclaimer
 
-PhotoMirror is an unofficial community project. It is not affiliated with, endorsed by or supported by Amazon. "Amazon" and "Amazon Photos" are trademarks of Amazon.com, Inc. or its affiliates.
+Rainbarrel for Amazon Photos is an unofficial community project. It is not affiliated with, endorsed by or supported by Amazon. "Amazon" and "Amazon Photos" are trademarks of Amazon.com, Inc. or its affiliates.
 
-The tool reads the local index database that the Amazon Photos desktop app keeps on your computer. That file is an internal detail of the app, so Amazon can change its location or format at any time, and PhotoMirror may stop working without notice. It is intended for backing up your own account. Use it at your own risk, and keep more than one copy of anything you care about.
+The tool reads the local index database that the Amazon Photos desktop app keeps on your computer. That file is an internal detail of the app, so Amazon can change its location or format at any time, and Rainbarrel may stop working without notice. It is intended for backing up your own account. Use it at your own risk, and keep more than one copy of anything you care about.
 
 ## How it works
 
-The Amazon Photos desktop app for Mac keeps a SQLite catalog of your whole library (names, sizes, dates and MD5 checksums) in `~/Library/Application Support/Amazon Cloud Drive/`. The app has that database open and writes to it, so PhotoMirror never opens the original. Each refresh copies the database together with its `-wal` and `-shm` files into a private temporary folder, reads the copy and deletes it afterwards.
+The Amazon Photos desktop app for Mac keeps a SQLite catalog of your whole library (names, sizes, dates and MD5 checksums) in `~/Library/Application Support/Amazon Cloud Drive/`. The app has that database open and writes to it, so Rainbarrel never opens the original. Each refresh copies the database together with its `-wal` and `-shm` files into a private temporary folder, reads the copy and deletes it afterwards.
 
-The catalog rows are copied into PhotoMirror's own database (`state.sqlite`). The backup drive is indexed the same way: a scan walks the drive, records the size and modification time of every file and computes an MD5 for each file that is new or has changed. Files that are already hashed are not read again. The drive is only ever opened for reading, and nothing is ever written to it.
+The catalog rows are copied into Rainbarrel's own database (`state.sqlite`). The backup drive is indexed the same way: a scan walks the drive, records the size and modification time of every file and computes an MD5 for each file that is new or has changed. Files that are already hashed are not read again. The drive is only ever opened for reading, and nothing is ever written to it.
 
 A comparison by MD5 then gives these categories:
 
@@ -46,25 +48,25 @@ The command line tool, the MCP server and the menu-bar app can all use the same 
 
 ### Download the app
 
-Download `PhotoMirror-<version>-macos.zip` from the [latest release](https://github.com/eugertjani-lab/amazon-photos-sync/releases/latest), unzip it and move `PhotoMirror.app` to your Applications folder. The release build is made on an Apple silicon runner and needs macOS 14 or later. PhotoMirror reads the local index of the Amazon Photos desktop app, so that app has to be installed and signed in on the same Mac.
+Download `Rainbarrel-<version>-macos.zip` from the [latest release](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/releases/latest), unzip it and move `Rainbarrel.app` to your Applications folder. The release build is made on an Apple silicon runner and needs macOS 14 or later. Rainbarrel reads the local index of the Amazon Photos desktop app, so that app has to be installed and signed in on the same Mac.
 
-The app is ad-hoc signed and is not notarized by Apple, so macOS asks for confirmation on the first launch. Right-click `PhotoMirror.app`, choose Open and confirm the dialog. Newer macOS versions may show a dialog without an Open button; in that case use Open Anyway under System Settings, Privacy & Security. Alternatively, remove the quarantine flag that the download added and open the app normally:
+The app is ad-hoc signed and is not notarized by Apple, so macOS asks for confirmation on the first launch. Right-click `Rainbarrel.app`, choose Open and confirm the dialog. Newer macOS versions may show a dialog without an Open button; in that case use Open Anyway under System Settings, Privacy & Security. Alternatively, remove the quarantine flag that the download added and open the app normally:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/PhotoMirror.app
+xattr -dr com.apple.quarantine /Applications/Rainbarrel.app
 ```
 
 ### Download the command line tool
 
-Each release also carries `apmirror-<version>-macos-universal.tar.gz` (Apple silicon and Intel, macOS 14 or later) and `apmirror-<version>-linux-x86_64.tar.gz`. Unpack the archive for your system and put `apmirror` somewhere on your `PATH`:
+Each release also carries `rainbarrel-<version>-macos-universal.tar.gz` (Apple silicon and Intel, macOS 14 or later) and `rainbarrel-<version>-linux-x86_64.tar.gz`. Unpack the archive for your system and put `rainbarrel` somewhere on your `PATH`:
 
 ```sh
-tar -xzf apmirror-<version>-macos-universal.tar.gz apmirror
-sudo mv apmirror /usr/local/bin/
-apmirror --version
+tar -xzf rainbarrel-<version>-macos-universal.tar.gz rainbarrel
+sudo mv rainbarrel /usr/local/bin/
+rainbarrel --version
 ```
 
-A binary downloaded with a browser carries the quarantine flag as well; `xattr -d com.apple.quarantine apmirror` clears it. The Linux build links the Swift runtime dynamically and the system SQLite, so it needs a Swift 6 runtime and `libsqlite3` on the machine.
+A binary downloaded with a browser carries the quarantine flag as well; `xattr -d com.apple.quarantine rainbarrel` clears it. The Linux build links the Swift runtime dynamically and the system SQLite, so it needs a Swift 6 runtime and `libsqlite3` on the machine.
 
 Every release has a `SHA256SUMS.txt` file. To check the files you downloaded, run this in the folder that holds them:
 
@@ -74,7 +76,7 @@ shasum -a 256 -c SHA256SUMS.txt --ignore-missing
 
 ### Build from source
 
-Install a Swift 6.1 or newer toolchain, clone the repository and follow [Requirements and build](#requirements-and-build). In short, `swift build -c release` produces `.build/release/apmirror`, and `scripts/build-app.sh` produces `build/PhotoMirror.app`.
+Install a Swift 6.1 or newer toolchain, clone the repository and follow [Requirements and build](#requirements-and-build). In short, `swift build -c release` produces `.build/release/rainbarrel`, and `scripts/build-app.sh` produces `build/Rainbarrel.app`.
 
 ## Requirements and build
 
@@ -84,45 +86,45 @@ Install a Swift 6.1 or newer toolchain, clone the repository and follow [Require
 ```sh
 swift build -c release
 swift test
-.build/release/apmirror --help
+.build/release/rainbarrel --help
 ```
 
-The command line binary is `.build/release/apmirror`. Copy it anywhere on your `PATH` if you like.
+The command line binary is `.build/release/rainbarrel`. Copy it anywhere on your `PATH` if you like.
 
 ## Command line usage
 
 ```sh
-# Tell PhotoMirror where the backup drive is. The optional subpath limits everything to one folder.
-apmirror config set-drive /Volumes/MyBackupDrive --scan-subpath "Amazon Photos Backup"
-apmirror config show
+# Tell Rainbarrel where the backup drive is. The optional subpath limits everything to one folder.
+rainbarrel config set-drive /Volumes/MyBackupDrive --scan-subpath "Amazon Photos Backup"
+rainbarrel config show
 
 # Copy the cloud catalog from the Amazon Photos app index.
-apmirror refresh-catalog
+rainbarrel refresh-catalog
 
 # Optional: import MD5s that another tool computed earlier, so they do not have to be recomputed.
-apmirror import-hashes ~/hashes.csv --prefix "Amazon Photos Backup"
+rainbarrel import-hashes ~/hashes.csv --prefix "Amazon Photos Backup"
 
 # Index the drive. Start with a quick metadata-only pass, then hash.
-apmirror scan --no-hash --limit 2000
-apmirror scan
+rainbarrel scan --no-hash --limit 2000
+rainbarrel scan
 
 # See how things stand.
-apmirror status
-apmirror status --json
+rainbarrel status
+rainbarrel status --json
 
 # List the details.
-apmirror online-only --year 2019 --limit 20
-apmirror drive-only --limit 20 --json
+rainbarrel online-only --year 2019 --limit 20
+rainbarrel drive-only --limit 20 --json
 ```
 
 `status` refreshes the cloud catalog first when the last refresh is more than ten minutes old; add `--no-refresh` to skip that. `--limit` on `scan` stops the run after that many files needed work (new, changed or not hashed yet), and files that are already up to date do not count, so repeated limited runs keep making progress.
 
-`apmirror sync` is a placeholder for the future download feature. It prints a message and exits with code 2.
+`rainbarrel sync` is a placeholder for the future download feature. It prints a message and exits with code 2.
 
-Example output of `apmirror status` (the numbers are made up):
+Example output of `rainbarrel status` (the numbers are made up):
 
 ```
-PhotoMirror status
+Rainbarrel status
   Catalog as of:          2026-01-15 09:12 (3 min ago)
   Catalog refreshed:      2026-01-15 09:14
   Drive:                  /Volumes/MyBackupDrive / Amazon Photos Backup
@@ -152,7 +154,7 @@ Drive
 
 ## MCP server
 
-`apmirror mcp` runs an MCP server on stdin and stdout, built on the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). The server is called `photomirror` and offers these tools:
+`rainbarrel mcp` runs an MCP server on stdin and stdout, built on the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). The server is called `rainbarrel` and offers these tools:
 
 - `sync_status` returns the full report as JSON. The optional `refresh` argument re-reads the Amazon index first; by default that only happens when the last refresh is more than ten minutes old. The report includes `onlineOnlyDistinctBytes` (the space a full mirror still needs, counting each distinct MD5 once) and, while the drive is mounted on macOS, `driveSpace` (volume name, total and available bytes).
 - `list_online_only` lists photos and videos that exist only in the cloud, with optional `year`, `limit` (default 50, at most 500) and `offset`.
@@ -166,7 +168,7 @@ Problems such as an unmounted drive or a missing Amazon index come back as tool 
 Register it with Claude Code:
 
 ```sh
-claude mcp add photomirror -- /path/to/apmirror mcp
+claude mcp add rainbarrel -- /path/to/rainbarrel mcp
 ```
 
 Register it with Claude Desktop by adding this to `~/Library/Application Support/Claude/claude_desktop_config.json` and restarting the app:
@@ -174,8 +176,8 @@ Register it with Claude Desktop by adding this to `~/Library/Application Support
 ```json
 {
   "mcpServers": {
-    "photomirror": {
-      "command": "/path/to/apmirror",
+    "rainbarrel": {
+      "command": "/path/to/rainbarrel",
       "args": ["mcp"]
     }
   }
@@ -184,14 +186,14 @@ Register it with Claude Desktop by adding this to `~/Library/Application Support
 
 ## Menu-bar app (macOS)
 
-`PhotoMirrorBar` is a SwiftUI menu-bar app that uses the same library directly. Build the app bundle with:
+`RainbarrelBar` is a SwiftUI menu-bar app that uses the same library directly. Build the app bundle with:
 
 ```sh
 scripts/build-app.sh
-open build/PhotoMirror.app
+open build/Rainbarrel.app
 ```
 
-The script makes a release build, assembles `build/PhotoMirror.app` with an `Info.plist` (a menu-bar-only app, macOS 14 or later, version taken from the same constant as the command line tool) and signs it ad hoc. Because the signature is ad hoc, the app is meant for your own machine; distributing it would need a Developer ID signature and notarization.
+The script makes a release build, assembles `build/Rainbarrel.app` with an `Info.plist` (a menu-bar-only app, macOS 14 or later, version taken from the same constant as the command line tool) and signs it ad hoc. Because the signature is ad hoc, the app is meant for your own machine; distributing it would need a Developer ID signature and notarization.
 
 The menu-bar item shows a checkmark cloud when everything is backed up, a cloud with a down arrow and a compact count (for example "185k") of the photos, videos and Live Photo videos that exist only in the cloud, a progress symbol while a scan runs, and a drive with a warning badge when the drive is not mounted or the catalog cannot be read. The symbols are template images, so the system tints them for light and dark menu bars.
 
@@ -202,36 +204,40 @@ The app loads the report at launch, refreshes it every ten minutes and whenever 
 To check the layout without clicking, render the popover with your real numbers into a PNG:
 
 ```sh
-build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-light.png
-build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-dark.png --dark
-build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-years-light.png --years
-build/PhotoMirror.app/Contents/MacOS/PhotoMirror --render-snapshot build/snapshot-years-dark.png --years --dark
+build/Rainbarrel.app/Contents/MacOS/Rainbarrel --render-snapshot build/snapshot-light.png
+build/Rainbarrel.app/Contents/MacOS/Rainbarrel --render-snapshot build/snapshot-dark.png --dark
+build/Rainbarrel.app/Contents/MacOS/Rainbarrel --render-snapshot build/snapshot-years-light.png --years
+build/Rainbarrel.app/Contents/MacOS/Rainbarrel --render-snapshot build/snapshot-years-dark.png --years --dark
 ```
 
-## Where PhotoMirror keeps its data
+## Where Rainbarrel keeps its data
 
-- macOS: `~/Library/Application Support/PhotoMirror/`
-- Linux: `$XDG_DATA_HOME/photomirror`, or `~/.local/share/photomirror` when `XDG_DATA_HOME` is not set.
+- macOS: `~/Library/Application Support/Rainbarrel/`
+- Linux: `$XDG_DATA_HOME/rainbarrel`, or `~/.local/share/rainbarrel` when `XDG_DATA_HOME` is not set.
 
-The folder holds `config.json` (drive root, optional scan subpath, optional explicit path of the Amazon Photos index) and `state.sqlite`. Setting the environment variable `PHOTOMIRROR_DATA_DIR` uses a different folder, which is handy for experiments. If the automatic detection of the Amazon Photos index picks the wrong file, point to the right one with `apmirror config set-index <path>`.
+The folder holds `config.json` (drive root, optional scan subpath, optional explicit path of the Amazon Photos index) and `state.sqlite`. Setting the environment variable `RAINBARREL_DATA_DIR` uses a different folder, which is handy for experiments (the old name `PHOTOMIRROR_DATA_DIR` still works but is deprecated). If the automatic detection of the Amazon Photos index picks the wrong file, point to the right one with `rainbarrel config set-index <path>`.
+
+### Upgrading from PhotoMirror
+
+Rainbarrel was previously called PhotoMirror. The first time Rainbarrel starts without `RAINBARREL_DATA_DIR` set and finds an old `PhotoMirror` data folder (`photomirror` on Linux) but no new one, it moves the whole folder to the new name in one step, so the database, its `-wal` and `-shm` files, the configuration and any seed CSV arrive together. The command line tool prints one line, "Moved data from ... to ...", when that happens. Nothing is copied or deleted. If the move fails, the old folder stays in use. Close the old app and MCP server before starting the new ones, because they keep the database open.
 
 ## Architecture
 
-- `Sources/MirrorCore` is the library that everything else builds on: the SQLite wrapper, the catalog source for the Amazon Photos index (behind a `CloudCatalogSource` protocol so other sources can be added), the state store, the drive scanner, the CSV importer, the reconciler that produces a `SyncReport`, and `MirrorTools` with `MirrorToolRegistry`, the plain functions behind the MCP tools and the app.
-- `Sources/apmirror` is the command line tool, built with swift-argument-parser. It also holds the thin adapter that exposes `MirrorToolRegistry` through the MCP Swift SDK, so the library itself has no MCP dependency.
-- `Sources/PhotoMirrorBar` is the menu-bar app. It is declared only on macOS, so Linux builds skip it.
+- `Sources/RainbarrelCore` is the library that everything else builds on: the SQLite wrapper, the catalog source for the Amazon Photos index (behind a `CloudCatalogSource` protocol so other sources can be added), the state store, the drive scanner, the CSV importer, the reconciler that produces a `SyncReport`, and `RainbarrelTools` with `RainbarrelToolRegistry`, the plain functions behind the MCP tools and the app.
+- `Sources/rainbarrel` is the command line tool, built with swift-argument-parser. It also holds the thin adapter that exposes `RainbarrelToolRegistry` through the MCP Swift SDK, so the library itself has no MCP dependency.
+- `Sources/RainbarrelBar` is the menu-bar app. It is declared only on macOS, so Linux builds skip it.
 - `Sources/CSQLite` is a system library target that links the system SQLite on Linux. macOS uses the SQLite that ships with the SDK.
-- `Tests/MirrorCoreTests` holds the unit tests, which run against a generated fake catalog and temporary folders.
+- `Tests/RainbarrelCoreTests` holds the unit tests, which run against a generated fake catalog and temporary folders.
 - `scripts/build-app.sh` assembles the app bundle.
 
 ## Linux
 
-The code is written to build on Linux: it uses the system SQLite through the `CSQLite` target (install `libsqlite3-dev`), swift-crypto for MD5 where CryptoKit is missing, and POSIX calls for file access. The menu-bar app is skipped there. Linux has no Amazon Photos desktop app, so you would copy the app's index files to the machine and select them with `apmirror config set-index`. Linux support has not been tested yet.
+The code is written to build on Linux: it uses the system SQLite through the `CSQLite` target (install `libsqlite3-dev`), swift-crypto for MD5 where CryptoKit is missing, and POSIX calls for file access. The menu-bar app is skipped there. Linux has no Amazon Photos desktop app, so you would copy the app's index files to the machine and select them with `rainbarrel config set-index`. Linux support has not been tested yet.
 
 ## Roadmap
 
 - Sign in to Amazon Photos directly, so the catalog no longer depends on the desktop app's local index.
-- Download online-only items to the drive (`apmirror sync`), from the command line, the MCP server and the menu-bar app.
+- Download online-only items to the drive (`rainbarrel sync`), from the command line, the MCP server and the menu-bar app.
 - A signed and notarized build of the menu-bar app.
 - Tested Linux support, for example running headless in a Proxmox container.
 

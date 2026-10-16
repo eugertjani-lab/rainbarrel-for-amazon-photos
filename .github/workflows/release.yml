@@ -22,11 +22,11 @@ jobs:
       - name: Show the toolchain
         run: swift --version
 
-      - name: Build PhotoMirror.app
+      - name: Build Rainbarrel.app
         run: scripts/build-app.sh
 
-      - name: Build apmirror for arm64 and x86_64
-        run: swift build -c release --product apmirror --arch arm64 --arch x86_64
+      - name: Build rainbarrel for arm64 and x86_64
+        run: swift build -c release --product rainbarrel --arch arm64 --arch x86_64
 
       - name: Package
         env:
@@ -34,16 +34,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist stage
-          ditto -c -k --keepParent build/PhotoMirror.app "dist/PhotoMirror-${TAG}-macos.zip"
+          ditto -c -k --keepParent build/Rainbarrel.app "dist/Rainbarrel-${TAG}-macos.zip"
 
-          BIN="$(swift build -c release --product apmirror --arch arm64 --arch x86_64 --show-bin-path)"
-          cp "$BIN/apmirror" stage/apmirror
+          BIN="$(swift build -c release --product rainbarrel --arch arm64 --arch x86_64 --show-bin-path)"
+          cp "$BIN/rainbarrel" stage/rainbarrel
           cp LICENSE stage/LICENSE
           # A fat binary needs one signature that covers both slices; ad hoc is enough to run.
-          codesign --force --sign - --timestamp=none stage/apmirror
-          lipo -info stage/apmirror
-          stage/apmirror --version
-          tar -czf "dist/apmirror-${TAG}-macos-universal.tar.gz" -C stage apmirror LICENSE
+          codesign --force --sign - --timestamp=none stage/rainbarrel
+          lipo -info stage/rainbarrel
+          stage/rainbarrel --version
+          tar -czf "dist/rainbarrel-${TAG}-macos-universal.tar.gz" -C stage rainbarrel LICENSE
           ls -l dist
 
       - name: Upload macOS files
@@ -70,8 +70,8 @@ jobs:
       - name: Show the toolchain
         run: swift --version
 
-      - name: Build apmirror (release)
-        run: swift build -c release --product apmirror
+      - name: Build rainbarrel (release)
+        run: swift build -c release --product rainbarrel
 
       - name: Package
         env:
@@ -79,10 +79,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist stage
-          cp "$(swift build -c release --product apmirror --show-bin-path)/apmirror" stage/apmirror
+          cp "$(swift build -c release --product rainbarrel --show-bin-path)/rainbarrel" stage/rainbarrel
           cp LICENSE stage/LICENSE
-          stage/apmirror --version
-          tar -czf "dist/apmirror-${TAG}-linux-$(uname -m).tar.gz" -C stage apmirror LICENSE
+          stage/rainbarrel --version
+          tar -czf "dist/rainbarrel-${TAG}-linux-$(uname -m).tar.gz" -C stage rainbarrel LICENSE
           ls -l dist
 
       - name: Upload Linux files
@@ -111,7 +111,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum PhotoMirror-*-macos.zip apmirror-*.tar.gz > SHA256SUMS.txt
+          sha256sum Rainbarrel-*-macos.zip rainbarrel-*.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create the GitHub release
@@ -122,7 +122,9 @@ jobs:
         run: |
           set -euo pipefail
           cat > notes.md <<'NOTES'
-          PhotoMirror.app is ad-hoc signed and is not notarized by Apple. On first launch, right-click the app and choose Open, or clear the quarantine flag with `xattr -dr com.apple.quarantine PhotoMirror.app`. The app and the `apmirror` command line tool read the local index of the Amazon Photos desktop app, so that app must be installed and signed in on the same Mac.
+          Rainbarrel for Amazon Photos is an unofficial tool and is not affiliated with Amazon.
+
+          Rainbarrel.app is ad-hoc signed and is not notarized by Apple. On first launch, right-click the app and choose Open, or clear the quarantine flag with `xattr -dr com.apple.quarantine Rainbarrel.app`. The app and the `rainbarrel` command line tool read the local index of the Amazon Photos desktop app, so that app must be installed and signed in on the same Mac.
 
           Check a download against `SHA256SUMS.txt` with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 

@@ -1,22 +1,22 @@
 #!/bin/bash
-# Build build/PhotoMirror.app: a release build of the menu-bar app wrapped in an app bundle and
-# signed ad hoc. macOS only. Run from anywhere; the output goes to <repo>/build/PhotoMirror.app.
+# Build build/Rainbarrel.app: a release build of the menu-bar app wrapped in an app bundle and
+# signed ad hoc. macOS only. Run from anywhere; the output goes to <repo>/build/Rainbarrel.app.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-swift build -c release --product apmirror
-swift build -c release --product PhotoMirrorBar
+swift build -c release --product rainbarrel
+swift build -c release --product RainbarrelBar
 BIN="$(swift build -c release --show-bin-path)"
 
-# One version constant (MirrorInfo.version) serves the CLI, the MCP server and the app.
-VERSION="$("$BIN/apmirror" --version)"
-BUNDLE_ID="io.github.amazon-photos-sync.photomirror"
-APP="build/PhotoMirror.app"
+# One version constant (RainbarrelInfo.version) serves the CLI, the MCP server and the app.
+VERSION="$("$BIN/rainbarrel" --version)"
+BUNDLE_ID="io.github.eugertjani-lab.rainbarrel"
+APP="build/Rainbarrel.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN/PhotoMirrorBar" "$APP/Contents/MacOS/PhotoMirror"
+cp "$BIN/RainbarrelBar" "$APP/Contents/MacOS/Rainbarrel"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -24,13 +24,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>PhotoMirror</string>
+    <string>Rainbarrel</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>PhotoMirror</string>
+    <string>Rainbarrel</string>
     <key>CFBundleDisplayName</key>
-    <string>PhotoMirror</string>
+    <string>Rainbarrel</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -46,9 +46,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright 2026 PhotoMirror contributors. MIT License.</string>
+    <string>Copyright 2026 Rainbarrel contributors. MIT License.</string>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>PhotoMirror reads your backup drive to find out which photos and videos are already backed up. It never writes to the drive.</string>
+    <string>Rainbarrel reads your backup drive to find out which photos and videos are already backed up. It never writes to the drive.</string>
 </dict>
 </plist>
 PLIST
