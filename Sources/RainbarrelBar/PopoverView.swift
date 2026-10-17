@@ -147,7 +147,7 @@ private struct RingRow: View {
 
     var body: some View {
         let palette = Palette(scheme)
-        let fraction = report.inSyncFraction
+        let fraction = report.inSyncByteFraction
         HStack(alignment: .center, spacing: 20) {
             RingGauge(
                 fraction: fraction,

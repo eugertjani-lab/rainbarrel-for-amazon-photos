@@ -221,6 +221,8 @@ All limits are in `config.json` under `throttle`, and `rainbarrel config set-thr
 | `dailyLimitGB` | 0 | Stop starting files after this many gigabytes per local day; 0 means unlimited. |
 | `minFreeSpaceGB` | 5 | A file that would leave less free space on the drive than this is not started. |
 
+The limit of 8 parallel files is fixed. All download slots share the one request budget of `maxRequestsPerMinute` against Amazon's unpublished web API, so more than 8 files at once mostly adds request pressure and the risk of 429 throttling or of Amazon flagging the account. The drive and the network are already saturated well before that, and 8 keeps a run fast but still gentle.
+
 ```sh
 rainbarrel config set-throttle --concurrency 1 --rpm 30 --mbps 2 --hours 01:00-06:00 --daily-gb 20
 rainbarrel config set-throttle --hours off

@@ -70,6 +70,13 @@ public struct SyncReport: Codable, Sendable, Equatable {
         photosVideos.count == 0 ? nil : Double(inSync.count) / Double(photosVideos.count)
     }
 
+    /// Share of the data that is backed up, 0...1: the bytes of photos, videos and Live Photo videos
+    /// on the drive over the bytes of all of them in the cloud (nil when the cloud is empty).
+    public var inSyncByteFraction: Double? {
+        let total = photosVideos.bytes + liveVideos.bytes
+        return total == 0 ? nil : Double(inSync.bytes + liveVideosInSync.bytes) / Double(total)
+    }
+
     public static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

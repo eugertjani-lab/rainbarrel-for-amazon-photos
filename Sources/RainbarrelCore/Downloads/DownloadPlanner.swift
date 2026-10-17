@@ -392,6 +392,22 @@ struct DownloadJobTable {
         return counts
     }
 
+    /// Jobs being downloaded now and the bytes finished in the last `DownloadActivity.window` seconds.
+    func recentActivity(now: Date = Date()) throws -> DownloadActivity {
+        let since = Int64(now.timeIntervalSince1970 - DownloadActivity.window)
+        var activity = DownloadActivity()
+        for (status, count, bytes) in try queue.database.rows("""
+            SELECT status, COUNT(*), COALESCE(SUM(size), 0) FROM download_jobs
+            WHERE status = 'downloading' OR (status = 'done' AND updated_at >= ?)
+            GROUP BY status
+            """, [since], map: { ($0.string(0) ?? "", $0.int(1), $0.int64(2)) })
+        {
+            if status == DownloadJobStatus.downloading.rawValue { activity.downloading = count }
+            if status == DownloadJobStatus.done.rawValue { activity.recentBytes = bytes }
+        }
+        return activity
+    }
+
     func failures(limit: Int) throws -> [DownloadFailure] {
         try queue.database.rows("""
             SELECT node_id, target_rel_path, attempts, last_error, updated_at FROM download_jobs

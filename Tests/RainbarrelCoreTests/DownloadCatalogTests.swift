@@ -153,6 +153,38 @@ struct DownloadCatalogTests {
         #expect(counts.downloading == 0 && counts.pending == 1)
     }
 
+    @Test func recentActivityCountsDownloadingJobsAndBytesFinishedInTheLastMinute() throws {
+        let store = try makeStore()
+        try seed(store, items: [
+            item("A", "a.jpg", "1"), item("B", "b.jpg", "2"), item("C", "c.jpg", "3"),
+            item("D", "d.jpg", "4"), item("E", "e.jpg", "5"),
+        ])
+        let table = DownloadJobTable(source: store, queue: store, config: config)
+        _ = try table.sync(includeLiveVideos: true, now: Date(timeIntervalSince1970: 1000))
+        #expect(try table.recentActivity(now: Date(timeIntervalSince1970: 1100)) == DownloadActivity())
+        #expect(!(try table.recentActivity(now: Date(timeIntervalSince1970: 1100))).isActive)
+
+        // A finished 30 s ago, B finished 90 s ago, C is being downloaded, D failed just now.
+        try table.setStatus(nodeId: "A", status: .done, attempts: 1, now: Date(timeIntervalSince1970: 1070))
+        try table.setStatus(nodeId: "B", status: .done, attempts: 1, now: Date(timeIntervalSince1970: 1010))
+        try table.setStatus(nodeId: "C", status: .downloading, now: Date(timeIntervalSince1970: 1095))
+        try table.setStatus(nodeId: "D", status: .failed, attempts: 1, lastError: .some("boom"), now: Date(timeIntervalSince1970: 1099))
+        let activity = try table.recentActivity(now: Date(timeIntervalSince1970: 1100))
+        #expect(activity.downloading == 1)
+        #expect(activity.recentBytes == 100)  // only A; every seeded item is 100 bytes
+        #expect(activity.isActive)
+        #expect(abs(activity.bytesPerSecond - 100.0 / 60.0) < 1e-9)
+
+        // Later the recent file has aged out and nothing is downloading: not active.
+        try table.setStatus(nodeId: "C", status: .done, attempts: 1, now: Date(timeIntervalSince1970: 1105))
+        let later = try table.recentActivity(now: Date(timeIntervalSince1970: 1200))
+        #expect(later == DownloadActivity())
+        #expect(!later.isActive)
+        // A file finished within the window counts as active even with nothing downloading.
+        let justDone = try table.recentActivity(now: Date(timeIntervalSince1970: 1110))
+        #expect(justDone.downloading == 0 && justDone.recentBytes == 200 && justDone.isActive)
+    }
+
     @Test func claimOrderIsNewestFirstAndFailuresWaitForTheNextRun() throws {
         let store = try makeStore()
         try seed(store, items: [
