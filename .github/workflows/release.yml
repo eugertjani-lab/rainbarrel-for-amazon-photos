@@ -126,7 +126,7 @@ jobs:
           cat > notes.md <<'NOTES'
           Rainbarrel for Amazon Photos is an unofficial tool and is not affiliated with Amazon.
 
-          Rainbarrel.app is ad-hoc signed and is not notarized by Apple. On first launch, right-click the app and choose Open, or clear the quarantine flag with `xattr -dr com.apple.quarantine Rainbarrel.app`. The app and the `rainbarrel` command line tool read the local index of the Amazon Photos desktop app, so that app must be installed and signed in on the same Mac.
+          Rainbarrel.app is ad-hoc signed and is not notarized by Apple. On first launch, right-click the app and choose Open, or clear the quarantine flag with `xattr -dr com.apple.quarantine Rainbarrel.app`. Rainbarrel reads your library either from the local index of the Amazon Photos desktop app or, after you sign in to Amazon in Rainbarrel, through Amazon's web API, so the desktop app is optional. Downloads use Amazon's private web API, which Amazon can change at any time.
 
           Check a download against `SHA256SUMS.txt` with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 
