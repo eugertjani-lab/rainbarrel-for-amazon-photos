@@ -99,6 +99,9 @@ enum PrimaryAction: Equatable {
     case none
     case signIn
     case signInAgain
+    /// No backup drive is chosen yet.
+    case noDriveSet
+    /// A drive is chosen but it is not mounted.
     case driveMissing
     case driveReadOnly
     case ready(count: Int, bytes: Int64, note: String?)
@@ -124,6 +127,7 @@ enum PanelScenario: String, CaseIterable {
     case waiting
     case paused
     case readOnly = "read-only"
+    case noDrive = "no-drive"
     case driveMissing = "drive-missing"
     case expired
     case finished

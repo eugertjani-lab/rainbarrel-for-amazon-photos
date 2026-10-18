@@ -297,13 +297,7 @@ struct SettingsView: View {
     }
 
     private func chooseFolder(startingAt path: String) -> String? {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        panel.directoryURL = URL(fileURLWithPath: path.isEmpty ? "/Volumes" : path)
-        return panel.runModal() == .OK ? panel.url?.path : nil
+        FolderPicker.choose(startingAt: path, prompt: "Choose")
     }
 
     private func chooseFile() -> String? {

@@ -31,24 +31,39 @@ struct MenuBarLabel: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Rainbarrel, \(DisplayFormat.number(count)) files only in the cloud")
-        case .downloading(let percent):
-            DownloadingGlyph(percent: percent)
+        case .downloading(let percent, let bytesPerSecond):
+            DownloadingGlyph(percent: percent, bytesPerSecond: bytesPerSecond)
         }
     }
 }
 
-/// A small progress ring with the percent next to it. The ring is a template image, so the system
-/// tints it for light and dark menu bars like the symbols above.
+/// The current download speed. A run of this app adds a small progress ring in front of it; a download
+/// by another process has no known progress, so the down-arrow symbol stands there instead. The ring
+/// is a template image, so the system tints it for light and dark menu bars like the symbols above.
 struct DownloadingGlyph: View {
-    let percent: Int
+    let percent: Int?
+    let bytesPerSecond: Double
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(nsImage: Self.ring(progress: Double(percent) / 100))
-            Text("\(percent)%").monospacedDigit()
+            if let percent {
+                Image(nsImage: Self.ring(progress: Double(percent) / 100))
+            } else {
+                Image(systemName: "icloud.and.arrow.down")
+            }
+            Text(DisplayFormat.speed(bytesPerSecond: bytesPerSecond)).monospacedDigit()
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Rainbarrel, downloading, \(percent) percent")
+        .accessibilityLabel("Rainbarrel, downloading, \(Self.spoken(bytesPerSecond))")
+    }
+
+    /// "14.2 megabytes per second", for VoiceOver.
+    static func spoken(_ bytesPerSecond: Double) -> String {
+        DisplayFormat.speed(bytesPerSecond: bytesPerSecond)
+            .replacingOccurrences(of: "KB/s", with: "kilobytes per second")
+            .replacingOccurrences(of: "MB/s", with: "megabytes per second")
+            .replacingOccurrences(of: "GB/s", with: "gigabytes per second")
+            .replacingOccurrences(of: "B/s", with: "bytes per second")
     }
 
     /// A ring of 16 pt: a faint track and an arc from 12 o'clock clockwise.

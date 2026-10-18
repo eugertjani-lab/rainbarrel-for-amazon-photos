@@ -48,8 +48,9 @@ enum BarState: Equatable {
     case synced
     /// Photos, videos and Live Photo videos that exist only in the cloud.
     case onlineOnly(Int)
-    /// Files are coming in; `percent` is 0...100.
-    case downloading(percent: Int)
+    /// Files are coming in. `percent` (0...100) is known only for a run of this app; a download by
+    /// another process (the command line) has none. `bytesPerSecond` is the current speed.
+    case downloading(percent: Int?, bytesPerSecond: Double)
     /// Amazon no longer accepts the stored sign-in.
     case signInExpired
 }
@@ -83,12 +84,16 @@ final class AppModel {
     private(set) var downloadNotice: String?
     /// A problem with signing in or out.
     private(set) var accountNotice: String?
+    /// Downloads seen in the state database, which includes a `rainbarrel download` run by another process.
+    private(set) var externalActivity = DownloadActivity()
 
     let tools: RainbarrelTools
 
     @ObservationIgnored private var cancelFlag: CancelFlag?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var timerTask: Task<Void, Never>?
+    @ObservationIgnored private var activityTask: Task<Void, Never>?
+    @ObservationIgnored private var lastActiveReload = Date.distantPast
     @ObservationIgnored private var volumeTask: Task<Void, Never>?
     @ObservationIgnored private var volumeObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var engineTask: Task<Void, Never>?
@@ -143,7 +148,12 @@ final class AppModel {
     var isBusy: Bool { isRefreshing || isScanning || isDownloadRunning }
 
     var barState: BarState {
-        if case .running(let display) = download { return .downloading(percent: display.percent) }
+        if case .running(let display) = download {
+            return .downloading(percent: display.percent, bytesPerSecond: display.bytesPerSecond)
+        }
+        if !isDownloadActive, externalActivity.isActive {
+            return .downloading(percent: nil, bytesPerSecond: externalActivity.bytesPerSecond)
+        }
         if account == .expired { return .signInExpired }
         if isScanning { return .scanning }
         guard let report else { return loadError != nil ? .warning : .loading }
@@ -162,6 +172,7 @@ final class AppModel {
         case .signedIn: break
         }
         if case .paused(let display) = download { return .paused(display) }
+        if (config.driveRoot ?? "").isEmpty { return .noDriveSet }
         guard let report else { return .none }
         if !report.driveMounted { return .driveMissing }
         if driveWritable == false { return .driveReadOnly }
@@ -197,6 +208,13 @@ final class AppModel {
                 await self?.reload(refreshCatalog: nil)
             }
         }
+        activityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                await self?.pollDownloadActivity()
+            }
+        }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -204,6 +222,23 @@ final class AppModel {
             }
             volumeObservers.append(observer)
         }
+    }
+
+    /// Look at the download queue in the state database (off the main actor). While files are being
+    /// downloaded, by this app or by another process, the report is reloaded about every 60 seconds
+    /// without refreshing the catalog, so the numbers in the panel keep moving.
+    private func pollDownloadActivity() async {
+        let activity = await Self.readDownloadActivity(tools: tools)
+        if activity != externalActivity { externalActivity = activity }
+        guard isDownloadRunning || activity.isActive else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastActiveReload) >= 60 else { return }
+        lastActiveReload = now
+        Task { await reload(refreshCatalog: false) }
+    }
+
+    nonisolated private static func readDownloadActivity(tools: RainbarrelTools) async -> DownloadActivity {
+        (try? tools.downloadActivity()) ?? DownloadActivity()
     }
 
     /// Mount and unmount notifications arrive in bursts; wait a moment, then reload once.
@@ -344,6 +379,21 @@ final class AppModel {
             config = newConfig
             await reload(refreshCatalog: false)
         }
+    }
+
+    /// Asks for the backup drive (or a folder on it) and saves it as the drive root.
+    func chooseDrive() {
+        NSApp.activate(ignoringOtherApps: true)
+        let current = config.driveRoot ?? ""
+        guard let path = FolderPicker.choose(
+            startingAt: current,
+            prompt: "Use as Backup",
+            message: "Choose the backup drive, or a folder on it, where Rainbarrel keeps your photos and videos.",
+            canCreateDirectories: true)
+        else { return }
+        var stored = (try? tools.loadConfig()) ?? config
+        stored.driveRoot = path
+        saveConfig(stored)
     }
 
     // MARK: Amazon account

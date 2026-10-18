@@ -7,7 +7,7 @@ import SwiftUI
 /// check the layout without clicking.
 ///
 /// Without `--state` it draws the real current report. With `--state` (signed-out, ready,
-/// downloading, waiting, paused, read-only, drive-missing, expired or finished) it draws fixture data
+/// downloading, waiting, paused, read-only, no-drive, drive-missing, expired or finished) it draws fixture data
 /// and touches neither the network, the Keychain nor the data folder. `--menubar` draws the
 /// menu-bar label of that state instead of the panel.
 @MainActor
@@ -163,6 +163,12 @@ enum SnapshotFixture {
             download = .paused(running)
         case .readOnly:
             writable = false
+        case .noDrive:
+            config.driveRoot = nil
+            report.driveRoot = nil
+            report.driveMounted = false
+            report.driveSpace = nil
+            writable = nil
         case .driveMissing:
             report.driveMounted = false
             report.driveSpace = nil

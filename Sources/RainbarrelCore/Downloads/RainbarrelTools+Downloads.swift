@@ -51,6 +51,14 @@ extension RainbarrelTools {
         }
     }
 
+    /// Whether any process is downloading right now, from the shared state database. Cheap enough to
+    /// poll every few seconds.
+    public func downloadActivity(now: Date = Date()) throws -> DownloadActivity {
+        let config = try loadConfig()
+        let store = try openStore()
+        return try DownloadJobTable(source: store, queue: store, config: config).recentActivity(now: now)
+    }
+
     public func downloadStatus(failureLimit: Int = 20) throws -> DownloadStatusReport {
         let config = try loadConfig()
         let store = try openStore()

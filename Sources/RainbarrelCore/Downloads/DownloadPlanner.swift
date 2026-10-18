@@ -146,7 +146,7 @@ public struct DownloadPlanner {
             FROM cloud_items c
             WHERE \(kinds) \(yearClause)
               AND NOT EXISTS (SELECT 1 FROM drive_files d
-                              WHERE d.md5 = c.md5 AND \(scope.sqlCondition(column: "d.rel_path")))
+                              WHERE d.md5 = c.md5 AND d.size > 0 AND \(scope.sqlCondition(column: "d.rel_path")))
             ORDER BY c.taken_at DESC, c.node_id
             """)
         try statement.bind(args)
@@ -169,7 +169,8 @@ public struct DownloadPlanner {
         var planned: [PlannedDownload] = []
         let limit = options.limit ?? Int.max
         try forEachCandidate(includeLiveVideos: options.includeLiveVideos, year: options.year) { item in
-            guard seenMD5.insert(item.md5).inserted else { return true }
+            // Empty files all share one MD5 but each one is created at its own path.
+            guard item.size == 0 || seenMD5.insert(item.md5).inserted else { return true }
             let (relPath, resolved) = builder.target(for: item)
             var finalRel = relPath
             var note: String?
@@ -360,7 +361,7 @@ struct DownloadJobTable {
     func isOnDrive(md5: String) throws -> Bool {
         let scope = try DriveScope(scanSubpath: config.scanSubpath)
         return try source.database.scalarInt64("""
-            SELECT 1 FROM drive_files d WHERE d.md5 = ? AND \(scope.sqlCondition(column: "d.rel_path")) LIMIT 1
+            SELECT 1 FROM drive_files d WHERE d.md5 = ? AND d.size > 0 AND \(scope.sqlCondition(column: "d.rel_path")) LIMIT 1
             """, [md5]) != nil
     }
 
@@ -386,10 +387,26 @@ struct DownloadJobTable {
             SELECT COUNT(*) FROM cloud_items c
             WHERE c.kind IN ('file', 'live_video')
               AND NOT EXISTS (SELECT 1 FROM drive_files d
-                              WHERE d.md5 = c.md5 AND \(scope.sqlCondition(column: "d.rel_path")))
+                              WHERE d.md5 = c.md5 AND d.size > 0 AND \(scope.sqlCondition(column: "d.rel_path")))
               AND NOT EXISTS (SELECT 1 FROM download_jobs j WHERE j.node_id = c.node_id)
             """) ?? 0)
         return counts
+    }
+
+    /// Jobs being downloaded now and the bytes finished in the last `DownloadActivity.window` seconds.
+    func recentActivity(now: Date = Date()) throws -> DownloadActivity {
+        let since = Int64(now.timeIntervalSince1970 - DownloadActivity.window)
+        var activity = DownloadActivity()
+        for (status, count, bytes) in try queue.database.rows("""
+            SELECT status, COUNT(*), COALESCE(SUM(size), 0) FROM download_jobs
+            WHERE status = 'downloading' OR (status = 'done' AND updated_at >= ?)
+            GROUP BY status
+            """, [since], map: { ($0.string(0) ?? "", $0.int(1), $0.int64(2)) })
+        {
+            if status == DownloadJobStatus.downloading.rawValue { activity.downloading = count }
+            if status == DownloadJobStatus.done.rawValue { activity.recentBytes = bytes }
+        }
+        return activity
     }
 
     func failures(limit: Int) throws -> [DownloadFailure] {

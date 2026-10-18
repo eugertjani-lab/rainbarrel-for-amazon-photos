@@ -44,6 +44,8 @@ A comparison by MD5 then gives these categories:
 - Drive only: a hashed file on the drive whose MD5 is in neither the photo and video catalog nor the Live Photo video catalog.
 - Live Photo videos: the video half of a Live Photo is reported as its own category with the same in sync and online only split, and is not included in the photo and video totals.
 
+Empty files are ignored in every comparison. Every 0-byte file has the same MD5 (`d41d8cd98f00b204e9800998ecf8427e`), so an empty file on the drive says nothing about an empty item in the cloud: a placeholder such as `.nomedia` or a lock file would otherwise "match" every broken zero-byte cloud item. An empty drive file is never a copy of a cloud item and never counts as drive only, and an empty cloud item stays online only until a download creates it as an empty file at its Amazon path.
+
 Years in the per-year table use the capture date from the catalog (the content date, or the creation date when there is none), interpreted as UTC. Trashed and purged items are ignored.
 
 ### Which drive files count
@@ -221,6 +223,8 @@ All limits are in `config.json` under `throttle`, and `rainbarrel config set-thr
 | `dailyLimitGB` | 0 | Stop starting files after this many gigabytes per local day; 0 means unlimited. |
 | `minFreeSpaceGB` | 5 | A file that would leave less free space on the drive than this is not started. |
 
+The limit of 8 parallel files is fixed. All download slots share the one request budget of `maxRequestsPerMinute` against Amazon's unpublished web API, so more than 8 files at once mostly adds request pressure and the risk of 429 throttling or of Amazon flagging the account. The drive and the network are already saturated well before that, and 8 keeps a run fast but still gentle.
+
 ```sh
 rainbarrel config set-throttle --concurrency 1 --rpm 30 --mbps 2 --hours 01:00-06:00 --daily-gb 20
 rainbarrel config set-throttle --hours off
@@ -276,7 +280,7 @@ rainbarrel download
 
 Without `--apply` the command prints a summary and a sample of moves and changes nothing. The summary counts the files to move (with how many go to `_Unsorted/<year>/<month>` because their cloud folder is unknown, and how many get a numbered name), the files already in place, extra copies, drive-only files, files that were skipped (with the reason) and the cloud files that are not on the drive at all. Paths are shown relative to the drive root.
 
-Files are matched by MD5, using the hashes of the last scan. Organize never hashes anything itself, so it is quick, and it leaves a file alone when its size or modification time no longer matches the index (run `rainbarrel scan` again). The target comes from the same code as the downloads: `<scan folder>/<cloud folder path>/<file name>`, with the `.MOV` name for the video half of a Live Photo, the `_Unsorted` fallback, and the same name cleaning and path checks. When the library holds the same bytes twice, one drive file satisfies one cloud item and the download engine's own duplicate handling decides whether more is needed; organize never copies a file.
+Files are matched by MD5, using the hashes of the last scan. Organize never hashes anything itself, so it is quick, and it leaves a file alone when its size or modification time no longer matches the index (run `rainbarrel scan` again). The target comes from the same code as the downloads: `<scan folder>/<cloud folder path>/<file name>`, with the `.MOV` name for the video half of a Live Photo, the `_Unsorted` fallback, and the same name cleaning and path checks. Empty files are never matched or moved for the same reason (every empty file has the same MD5); the preview counts them on an "Empty files" line and they stay where they are. When the library holds the same bytes twice, one drive file satisfies one cloud item and the download engine's own duplicate handling decides whether more is needed; organize never copies a file.
 
 If several drive files have the content of one cloud file, the one that is already at the target is kept, otherwise the one with the shortest path (then the first in alphabetical order) is moved, and the others are reported as extra copies and stay where they are. If the target name is taken by a file with the same MD5, the source is such an extra copy and stays. If it is taken by different content, the file gets a numbered name (`IMG_0001 (2).jpg`), like a download would. A file that matches nothing in the cloud (a drive-only file) is never touched, and neither is a file without a hash.
 
@@ -333,7 +337,13 @@ open build/Rainbarrel.app
 
 The script makes a release build, assembles `build/Rainbarrel.app` with an `Info.plist` (a menu-bar-only app, macOS 14 or later, version taken from the same constant as the command line tool) and signs it ad hoc. Because the signature is ad hoc, the app is meant for your own machine; distributing it would need a Developer ID signature and notarization.
 
+To install it like any other Mac app, open the `.dmg` from a release (or build one with `scripts/build-dmg.sh`, which writes `build/Rainbarrel-<version>.dmg`) and drag Rainbarrel onto the Applications shortcut in the window. You can also open the app straight from the disk image or from the Downloads folder: Rainbarrel then offers to move itself to the Applications folder, copies itself there and opens the copy. The move also clears the quarantine flag that macOS puts on downloaded files, which matters because the app is ad hoc signed and not notarized. Answer "Do not ask again" in that prompt if you prefer to keep the app where it is.
+
+Opening the app from the Applications folder or the Finder shows the panel in a normal window, in addition to the menu-bar item. A new install has no backup drive yet, so the panel starts with a "Choose Backup Drive…" button. The same chooser is available as "Choose Another Drive…" when the configured drive is not connected, and the settings window has it as well.
+
 The menu-bar item shows a checkmark cloud when everything is backed up, a cloud with a down arrow and a compact count (for example "185k") of the photos, videos and Live Photo videos that exist only in the cloud, a progress symbol while a scan runs, and a drive with a warning badge when the drive is not mounted or the catalog cannot be read. The symbols are template images, so the system tints them for light and dark menu bars.
+
+On a MacBook with a camera notch and many menu-bar items, macOS places items that do not fit beside the notch behind the « button at the left of the status items, and a newly launched app usually lands there. Click « to show the hidden items; Rainbarrel is the drive symbol while the backup drive is not connected. To keep it in view, hold Command and drag the icon to the right of «, or turn off menu-bar items you do not need in System Settings > Menu Bar. Opening the app again while it runs (from the Finder or with `open build/Rainbarrel.app`) also shows the panel in a normal window.
 
 The popover is 360 pt wide and follows the system appearance. It opens on a ring gauge with the in sync percentage and three figures (on your drive, only in the cloud, Live Photo videos), the five years with the most photos that are only in the cloud, a card with the drive's free space and whether a full mirror of the cloud would fit, and the catalog and scan status. A "Scan drive" button shows live progress and a Stop button while a scan runs, a refresh button re-reads the catalog, and a gear menu opens the settings, the data folder or quits. "All years" replaces the overview with a year map, one cell per year from 2000 on, with a blue fill for the share that is on the drive. The settings window chooses the drive folder, the scan subpath and an optional Amazon index override, and opens the data folder.
 

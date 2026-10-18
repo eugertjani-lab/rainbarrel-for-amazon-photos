@@ -46,6 +46,14 @@ struct ReconcilerTests {
         #expect(abs(try #require(report.inSyncFraction) - 0.6) < 1e-9)
     }
 
+    @Test func byteFractionCountsLiveVideosAndWeighsBySize() throws {
+        let (_, reconciler) = try makeScenario()
+        let report = try reconciler.report(driveRoot: nil, now: Date(timeIntervalSince1970: 1_800_000_100))
+        // On the drive: 500 + 50 bytes of 1100 + 110 bytes in the cloud. By count it is 3 of 5 (0.6).
+        #expect(abs(try #require(report.inSyncByteFraction) - 550.0 / 1210.0) < 1e-9)
+        #expect(report.inSyncByteFraction != report.inSyncFraction)
+    }
+
     @Test func distinctBytesCountEachMissingMD5Once() throws {
         let (_, reconciler) = try makeScenario()
         let report = try reconciler.report(driveRoot: nil)
@@ -172,6 +180,7 @@ struct ReconcilerTests {
         #expect(report.photosVideos == CountBytes())
         #expect(report.years.isEmpty)
         #expect(report.inSyncFraction == nil)
+        #expect(report.inSyncByteFraction == nil)
         #expect(report.catalogFreshness == nil)
         #expect(report.lastScanAt == nil)
     }

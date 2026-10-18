@@ -132,6 +132,8 @@ public struct OrganizeSummary: Codable, Sendable, Equatable {
     public var driveOnlyUntouchedBytes: Int64
     /// Drive files without an MD5 (not scanned yet, or unreadable). They cannot be matched and stay.
     public var unhashedUntouched: Int
+    /// Empty drive files. Every empty file has the same MD5, so they are never matched and stay.
+    public var emptyUntouched: Int
     public var skipped: [OrganizeSkipGroup]
     public var skippedTotal: Int
     /// Cloud items without any copy on the drive: the downloads' job, not organize's.

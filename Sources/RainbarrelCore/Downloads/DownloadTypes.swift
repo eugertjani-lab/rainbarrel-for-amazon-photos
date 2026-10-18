@@ -140,6 +140,28 @@ public struct DownloadQueueCounts: Codable, Sendable, Equatable {
     public init() {}
 }
 
+/// Whether files are being downloaded right now, judged from the shared state database alone, so a
+/// download run by another process (the command line) shows up too.
+public struct DownloadActivity: Codable, Sendable, Equatable {
+    /// Seconds of recently finished files that `recentBytes` covers.
+    public static let window: TimeInterval = 60
+
+    /// Jobs with status `downloading`.
+    public var downloading = 0
+    /// Bytes of jobs that finished (status `done`) within the last `window` seconds.
+    public var recentBytes: Int64 = 0
+
+    public init(downloading: Int = 0, recentBytes: Int64 = 0) {
+        self.downloading = downloading
+        self.recentBytes = recentBytes
+    }
+
+    public var isActive: Bool { downloading > 0 || recentBytes > 0 }
+
+    /// Average speed over the window.
+    public var bytesPerSecond: Double { Double(recentBytes) / Self.window }
+}
+
 /// A failed job with the reason, for `download-status`.
 public struct DownloadFailure: Codable, Sendable, Equatable {
     public var nodeId: String

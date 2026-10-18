@@ -3,6 +3,11 @@ import Foundation
 /// How gently downloads treat Amazon and the drive. Stored in `config.json` under `throttle`;
 /// every field is optional there and falls back to the default.
 public struct ThrottleConfig: Codable, Sendable, Equatable {
+    /// The allowed values of `maxConcurrentDownloads`. Every download slot draws on the same request
+    /// budget (`maxRequestsPerMinute`, one token bucket), and the budget is spent against Amazon's
+    /// unpublished web API. More than 8 parallel files mostly adds request pressure and the risk of
+    /// 429 throttling or of Amazon flagging the account, while the drive and the network are already
+    /// saturated well before that. 8 keeps a run fast but still gentle.
     public static let concurrencyRange = 1...8
 
     /// Files downloaded at the same time (1 to 8).
