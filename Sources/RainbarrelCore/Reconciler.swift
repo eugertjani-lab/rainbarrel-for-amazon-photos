@@ -16,10 +16,10 @@ public struct Reconciler {
     /// Drive rows that count: inside the scope, aliased as `d`.
     private var driveScope: String { scope.sqlCondition(column: "d.rel_path") }
     private var backedUp: String {
-        "EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND \(driveScope))"
+        "EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND d.size > 0 AND \(driveScope))"
     }
     private var notBackedUp: String {
-        "NOT EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND \(driveScope))"
+        "NOT EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND d.size > 0 AND \(driveScope))"
     }
 
     /// Build the full report.
@@ -60,7 +60,7 @@ public struct Reconciler {
 
         let driveOnly = try database.rows("""
             SELECT COUNT(*), COALESCE(SUM(d.size), 0) FROM drive_files d
-            WHERE d.md5 IS NOT NULL AND \(driveScope)
+            WHERE d.md5 IS NOT NULL AND d.size > 0 AND \(driveScope)
               AND NOT EXISTS (SELECT 1 FROM cloud_items c WHERE c.md5 = d.md5)
             """) { CountBytes(count: $0.int(0), bytes: $0.int64(1)) }.first ?? CountBytes()
         let hashed = try database.scalarInt64(
@@ -158,7 +158,7 @@ public struct Reconciler {
 
     public func driveOnlyCount() throws -> Int {
         Int(try database.scalarInt64("""
-            SELECT COUNT(*) FROM drive_files d WHERE d.md5 IS NOT NULL AND \(driveScope)
+            SELECT COUNT(*) FROM drive_files d WHERE d.md5 IS NOT NULL AND d.size > 0 AND \(driveScope)
               AND NOT EXISTS (SELECT 1 FROM cloud_items c WHERE c.md5 = d.md5)
             """) ?? 0)
     }
@@ -167,7 +167,7 @@ public struct Reconciler {
     public func driveOnly(limit: Int, offset: Int = 0) throws -> [DriveOnlyItem] {
         try database.rows("""
             SELECT d.rel_path, d.md5, d.size, d.mtime FROM drive_files d
-            WHERE d.md5 IS NOT NULL AND \(driveScope)
+            WHERE d.md5 IS NOT NULL AND d.size > 0 AND \(driveScope)
               AND NOT EXISTS (SELECT 1 FROM cloud_items c WHERE c.md5 = d.md5)
             ORDER BY d.rel_path LIMIT ? OFFSET ?
             """, [limit, offset]) { row in

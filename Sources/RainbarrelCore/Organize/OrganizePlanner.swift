@@ -69,6 +69,7 @@ struct OrganizePlan {
     var skips = OrganizeSkipTally()
     var driveOnly = (count: 0, bytes: Int64(0))
     var unhashed = 0
+    var empty = 0
     var onlineOnly = 0
 
     var summary: OrganizeSummary {
@@ -79,7 +80,7 @@ struct OrganizePlan {
             alreadyInPlace: alreadyInPlace, duplicatesLeft: duplicates.count,
             duplicatesLeftBytes: duplicates.reduce(0) { $0 + $1.size },
             driveOnlyUntouched: driveOnly.count, driveOnlyUntouchedBytes: driveOnly.bytes,
-            unhashedUntouched: unhashed, skipped: skips.groups, skippedTotal: skips.total, onlineOnly: onlineOnly)
+            unhashedUntouched: unhashed, emptyUntouched: empty, skipped: skips.groups, skippedTotal: skips.total, onlineOnly: onlineOnly)
     }
 
     func entry(for move: OrganizePlannedMove) -> OrganizeMoveEntry {
@@ -129,7 +130,7 @@ struct OrganizePlanner {
         var filesByMD5: [String: [OrganizeDriveFile]] = [:]
         let fileRows = try database.prepare("""
             SELECT d.rel_path, d.size, d.mtime, d.md5 FROM drive_files d
-            WHERE d.md5 IS NOT NULL AND \(driveScope)
+            WHERE d.md5 IS NOT NULL AND d.size > 0 AND \(driveScope)
               AND EXISTS (SELECT 1 FROM cloud_items c WHERE c.md5 = d.md5 AND c.kind IN ('file', 'live_video'))
             """)
         while try fileRows.step() {
@@ -146,7 +147,7 @@ struct OrganizePlanner {
             SELECT c.node_id, c.kind, c.name, c.md5, c.size, c.taken_at, c.ext, c.parent_id
             FROM cloud_items c
             WHERE c.kind IN ('file', 'live_video')
-              AND EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND \(driveScope))
+              AND EXISTS (SELECT 1 FROM drive_files d WHERE d.md5 = c.md5 AND d.size > 0 AND \(driveScope))
             ORDER BY c.taken_at DESC, c.node_id
             """)
         while try itemRows.step() {
@@ -164,12 +165,15 @@ struct OrganizePlanner {
         plan.onlineOnly = max(totalItems - matchedItems, 0)
         let driveOnlyRow = try database.rows("""
             SELECT COUNT(*), COALESCE(SUM(d.size), 0) FROM drive_files d
-            WHERE d.md5 IS NOT NULL AND \(driveScope)
+            WHERE d.md5 IS NOT NULL AND d.size > 0 AND \(driveScope)
               AND NOT EXISTS (SELECT 1 FROM cloud_items c WHERE c.md5 = d.md5)
             """) { ($0.int(0), $0.int64(1)) }.first
         plan.driveOnly = (driveOnlyRow?.0 ?? 0, driveOnlyRow?.1 ?? 0)
         plan.unhashed = Int(try database.scalarInt64(
-            "SELECT COUNT(*) FROM drive_files d WHERE d.md5 IS NULL AND \(driveScope)") ?? 0)
+            "SELECT COUNT(*) FROM drive_files d WHERE d.md5 IS NULL AND d.size > 0 AND \(driveScope)") ?? 0)
+        // Empty files all share one MD5, so they match nothing and stay where they are.
+        plan.empty = Int(try database.scalarInt64(
+            "SELECT COUNT(*) FROM drive_files d WHERE d.size = 0 AND \(driveScope)") ?? 0)
 
         // 1. Every cloud item claims at most one drive file with its MD5.
         let builder = try TargetBuilder(store: store, scanSubpath: config.scanSubpath)

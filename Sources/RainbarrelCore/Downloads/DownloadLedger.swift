@@ -65,7 +65,8 @@ actor DownloadLedger {
             guard var job = try table.nextEligible(options: options, runStartedAt: runStartedAt) else {
                 return (nil, skipped)
             }
-            if runMD5s.contains(job.md5) {
+            // Empty files all share one MD5 but each one is created at its own path.
+            if job.size > 0, runMD5s.contains(job.md5) {
                 try table.setStatus(
                     nodeId: job.nodeId, status: .skipped,
                     lastError: .some("same content is downloaded once in this run"), now: now)
@@ -78,7 +79,7 @@ actor DownloadLedger {
                 skipped.append(job)
                 continue
             }
-            runMD5s.insert(job.md5)
+            if job.size > 0 { runMD5s.insert(job.md5) }
             started += 1
             try table.setStatus(nodeId: job.nodeId, status: .downloading, now: now)
             job.status = .downloading
@@ -89,7 +90,7 @@ actor DownloadLedger {
     /// Put a claimed job back (cancelled, drive gone, session expired, limits).
     func release(_ job: DownloadJob, now: Date) {
         try? table.setStatus(nodeId: job.nodeId, status: .pending, now: now)
-        runMD5s.remove(job.md5)
+        if job.size > 0 { runMD5s.remove(job.md5) }
         started = max(started - 1, 0)
     }
 

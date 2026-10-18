@@ -143,6 +143,9 @@ struct Organize: ParsableCommand {
         if s.unhashedUntouched > 0 {
             print("  Not hashed:       \(Format.number(s.unhashedUntouched))  (run `rainbarrel scan`; they cannot be matched and stay)")
         }
+        if s.emptyUntouched > 0 {
+            print("  Empty files:      \(Format.number(s.emptyUntouched))  (all share one MD5, so they match nothing and stay)")
+        }
         print("  Skipped:          \(Format.number(s.skippedTotal))")
         for group in s.skipped {
             print("      \(Format.number(group.count)) \(group.explanation)")
