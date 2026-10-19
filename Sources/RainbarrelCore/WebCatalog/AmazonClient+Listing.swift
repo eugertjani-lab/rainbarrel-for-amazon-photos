@@ -56,19 +56,20 @@ struct WebChangeFeed: Sendable, Equatable {
 extension AmazonClient {
     /// One cheap call that shows whether the session works: it asks for the number of files in the
     /// account (a listing of one node). Throws `DownloadError.sessionExpired` when Amazon refuses the
-    /// session or answers with a sign-in page. The menu-bar app uses it to check a fresh sign-in.
+    /// session (401 or 403) or answers with a sign-in page. The menu-bar app uses it to check a fresh
+    /// sign-in, and the client uses it to find out what a 403 means, so a 403 here is final.
     public func verifySession() async throws -> Int {
-        try await availableFileCount()
+        try await availableFileCount(confirmForbidden: false)
     }
 
     /// The number of photo and video files Amazon has right now, from the `count` of a listing that
-    /// asks for a single node.
-    func availableFileCount() async throws -> Int {
+    /// asks for a single node. A 403 is checked like any other (see `check`) unless `confirmForbidden` is false.
+    func availableFileCount(confirmForbidden: Bool = true) async throws -> Int {
         let url = try AmazonEndpoints.listURL(host: host, filter: "kind:FILE AND status:AVAILABLE", limit: 1)
         let response = try await streaming.perform(
             try request(for: url), timeouts: timeouts, collectLimit: 1_000_000, onData: nil,
             redirect: { [self] in redirectRequest(to: $0) })
-        try check(response)
+        try await check(response, confirmForbidden: confirmForbidden)
         try rejectSignInPage(response)
         struct Payload: Decodable { var count: Int }
         guard let payload = try? JSONDecoder().decode(Payload.self, from: response.body), payload.count >= 0 else {
@@ -93,7 +94,7 @@ extension AmazonClient {
         let response = try await streaming.perform(
             try request(for: url, body: body, timeouts: patient), timeouts: patient, collectLimit: 256_000_000,
             onData: nil, redirect: { [self] in redirectRequest(to: $0) })
-        try check(response)
+        try await check(response)
         try rejectSignInPage(response)
         return try Self.parseChangeFeed(response.body)
     }

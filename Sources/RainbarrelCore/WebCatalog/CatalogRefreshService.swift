@@ -114,6 +114,7 @@ public struct CatalogRefreshService: Sendable {
     ) throws -> WebAPICatalogSource {
         guard let session = try sessionStore.load() else { throw DownloadError.notSignedIn }
         guard session.isUsable() else { throw DownloadError.sessionExpired }
-        return try WebAPICatalogSource.make(session: session, config: config, environment: environment, onProgress: progress)
+        return try WebAPICatalogSource.make(
+            session: session, config: config, environment: environment, sessionStore: sessionStore, onProgress: progress)
     }
 }

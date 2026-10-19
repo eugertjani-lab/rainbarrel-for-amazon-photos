@@ -270,7 +270,9 @@ struct WebCatalogTests {
         let fx = try WebFixture()
         let tools = try fx.tools()
         _ = try await tools.refreshCatalog()  // first, a working catalog
+        // Amazon refuses the feed, and the check of the session is refused too: the sign-in is gone.
         fx.overrideChanges { _ in .body(Data(), status: 403) }
+        fx.overrideNodes { _ in .body(Data(), status: 403) }
         let error = await thrownError { _ = try await tools.refreshCatalog(full: true) }
         let message = (error as? ToolError)?.message ?? "\(String(describing: error))"
         #expect(message.contains("sign in again"))

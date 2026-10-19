@@ -415,8 +415,13 @@ public struct DownloadEngine: Sendable {
     /// Run the downloads. Throws for problems that prevent the run from starting (no drive, drive
     /// read-only, another run active, session rejected at the first request); everything that
     /// happens later ends the run with a `stopReason` in the summary.
+    ///
+    /// With a `sessionStore`, cookies that Amazon refreshes during the run are written back (at most
+    /// once a minute and once at the end, and never over a sign-in made in the meantime), and when
+    /// Amazon refuses the session while the store holds a newer sign-in, the run switches to that
+    /// one and goes on instead of stopping.
     public func run(
-        config: Config, session: StoredSession, options: DownloadOptions,
+        config: Config, session: StoredSession, options: DownloadOptions, sessionStore: (any SessionStore)? = nil,
         progress: @escaping @Sendable (DownloadProgress) -> Void = { _ in }
     ) async throws -> DownloadSummary {
         let clock = environment.clock
@@ -458,8 +463,8 @@ public struct DownloadEngine: Sendable {
             runStartedAt: startedAt)
         do {
             let summary = try await execute(
-                ledger: ledger, config: config, session: session, options: options, throttle: throttle,
-                hours: hours, root: root, scanFolder: scanFolder, startedAt: startedAt,
+                ledger: ledger, config: config, session: session, sessionStore: sessionStore, options: options,
+                throttle: throttle, hours: hours, root: root, scanFolder: scanFolder, startedAt: startedAt,
                 progress: progress)
             await ledger.discardScratch()
             return summary
@@ -470,8 +475,8 @@ public struct DownloadEngine: Sendable {
     }
 
     private func execute(
-        ledger: DownloadLedger, config: Config, session: StoredSession, options: DownloadOptions,
-        throttle: ThrottleConfig, hours: ActiveHours?, root: String, scanFolder: String,
+        ledger: DownloadLedger, config: Config, session: StoredSession, sessionStore: (any SessionStore)?,
+        options: DownloadOptions, throttle: ThrottleConfig, hours: ActiveHours?, root: String, scanFolder: String,
         startedAt: Date, progress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws -> DownloadSummary {
         let clock = environment.clock
@@ -482,7 +487,13 @@ public struct DownloadEngine: Sendable {
         let client = try AmazonClient(
             session: session, host: config.effectiveAmazonHost, configuration: environment.sessionConfiguration(),
             timeouts: environment.timeouts)
-        defer { client.invalidate() }
+        let persister = sessionStore.map {
+            SessionPersister(client: client, store: $0, baseline: session, now: { clock.now() })
+        }
+        defer {
+            persister?.flush()
+            client.invalidate()
+        }
 
         let coordinator = RunCoordinator(filesTotal: totals.count, bytesTotal: totals.bytes)
         guard totals.count > 0 else {
@@ -516,8 +527,7 @@ public struct DownloadEngine: Sendable {
             scanFolder: scanFolder, ledger: ledger, client: client, limiter: limiter,
             gate: ThrottleGate(clock: clock, random: environment.random),
             pacer: BandwidthPacer(bytesPerSecond: throttle.bytesPerSecondLimit),
-            coordinator: coordinator, metrics: metrics, allocator: allocator,
-            redactor: SecretRedactor(session: session))
+            coordinator: coordinator, metrics: metrics, allocator: allocator, persister: persister)
 
         let workers = max(1, min(throttle.maxConcurrentDownloads, totals.count))
         await withTaskGroup(of: Void.self) { group in
@@ -563,7 +573,10 @@ final class RunContext: @unchecked Sendable {
     let coordinator: RunCoordinator
     let metrics: RunMetrics
     let allocator: TargetAllocator
-    let redactor: SecretRedactor
+    let persister: SessionPersister?
+
+    /// Hides the cookie values of the session, including the ones Amazon refreshed during the run.
+    var redactor: SecretRedactor { client.redactor }
 
     private var clock: DownloadClock { engine.environment.clock }
 
@@ -571,7 +584,7 @@ final class RunContext: @unchecked Sendable {
         engine: DownloadEngine, options: DownloadOptions, throttle: ThrottleConfig,
         hours: ActiveHours?, root: String, scanFolder: String, ledger: DownloadLedger,
         client: AmazonClient, limiter: RateLimiter, gate: ThrottleGate, pacer: BandwidthPacer,
-        coordinator: RunCoordinator, metrics: RunMetrics, allocator: TargetAllocator, redactor: SecretRedactor
+        coordinator: RunCoordinator, metrics: RunMetrics, allocator: TargetAllocator, persister: SessionPersister?
     ) {
         self.engine = engine
         self.options = options
@@ -587,7 +600,7 @@ final class RunContext: @unchecked Sendable {
         self.coordinator = coordinator
         self.metrics = metrics
         self.allocator = allocator
-        self.redactor = redactor
+        self.persister = persister
     }
 
     // MARK: Progress
@@ -621,10 +634,24 @@ final class RunContext: @unchecked Sendable {
             await coordinator.countSkipped(claimed.skippedDuplicates)
             guard let job = claimed.job else { return }
             await process(job)
+            await saveRefreshedCookies()
             if throttle.pauseBetweenFilesMs > 0 {
                 try? await clock.sleep(Double(throttle.pauseBetweenFilesMs) / 1000)
             }
         }
+    }
+
+    /// Write cookies that Amazon refreshed back to the session store, when that is due.
+    private func saveRefreshedCookies() async {
+        guard let persister else { return }
+        _ = try? await blocking { persister.saveIfDue() }
+    }
+
+    /// The session was refused. True when the file should be tried again, because the store holds a
+    /// newer sign-in that the client has switched to.
+    private func switchedToNewerSignIn(attemptEpoch: Int) async -> Bool {
+        guard let persister else { return false }
+        return (try? await blocking { persister.recoverFromRefusal(attemptEpoch: attemptEpoch) }) ?? false
     }
 
     /// Wait until new files may be started. Returns false when the run should end instead.
@@ -735,11 +762,13 @@ final class RunContext: @unchecked Sendable {
                 await ledger.release(job, now: clock.now())
                 return
             }
+            var attemptEpoch = client.sessionEpoch
             do {
                 try await gate.waitUntilClear()
                 try await limiter.acquire()
                 let attemptBytes = AttemptBytes()
                 let received: (size: Int64, md5: String)
+                attemptEpoch = client.sessionEpoch
                 do {
                     received = try await receive(job, into: part, counting: attemptBytes)
                 } catch {
@@ -770,6 +799,7 @@ final class RunContext: @unchecked Sendable {
             } catch let error as DownloadError {
                 switch error {
                 case .sessionExpired:
+                    if await switchedToNewerSignIn(attemptEpoch: attemptEpoch) { continue }
                     await ledger.release(job, now: clock.now())
                     await coordinator.requestStop(.sessionExpired)
                     return

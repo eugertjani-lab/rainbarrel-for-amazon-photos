@@ -106,7 +106,7 @@ extension RainbarrelTools {
         let options = DownloadOptions(year: year, limit: limit, hoursPolicy: .exit, maxLongPauses: 0)
         let summary: DownloadSummary
         do {
-            summary = try await engine.run(config: config, session: session, options: options)
+            summary = try await engine.run(config: config, session: session, options: options, sessionStore: sessionStore)
         } catch let error as DownloadError {
             throw ToolError(error.description)
         }

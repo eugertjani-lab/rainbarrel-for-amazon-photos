@@ -138,7 +138,9 @@ struct Download: AsyncParsableCommand {
         try await ensureCatalog(context)
 
         let printer = DownloadProgressPrinter()
-        let task = Task { try await engine.run(config: config, session: session, options: options) { printer.update($0) } }
+        let task = Task {
+            try await engine.run(config: config, session: session, options: options, sessionStore: store) { printer.update($0) }
+        }
         let interrupt = Self.cancelOnInterrupt { task.cancel() }
         defer { interrupt.cancel() }
         let summary: DownloadSummary

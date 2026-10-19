@@ -189,9 +189,10 @@ struct DownloadEngineTests {
         #expect(jobs.map(\.status) == [.pending, .pending] && jobs.map(\.attempts) == [0, 0])
     }
 
-    @Test func a403AlsoCountsAsAnExpiredSession() async throws {
+    @Test func a403CountsAsAnExpiredSessionWhenTheSessionCheckIsRefusedToo() async throws {
         let fx = try DownloadFixture(files: [file("N1", "a.jpg")])
         fx.overrideContent { _, _ in .body(Data(), status: 403) }
+        fx.overrideListing { _ in .body(Data(), status: 403) }
         #expect(try await fx.run().stopReason == .sessionExpired)
     }
 

@@ -389,14 +389,28 @@ public struct SecretRedactor: Sendable {
     private let secrets: [String]
 
     public init(session: StoredSession?) {
+        self.init(secrets: Self.secretValues(in: session))
+    }
+
+    private init(secrets: [String]) {
+        self.secrets = Array(Set(secrets)).sorted { $0.count > $1.count }
+    }
+
+    public static let none = SecretRedactor(session: nil)
+
+    /// A redactor that hides the cookie values of `session` as well as the ones this one hides. The
+    /// old values stay hidden, because an error text may still carry a value that was replaced since.
+    public func adding(_ session: StoredSession) -> SecretRedactor {
+        SecretRedactor(secrets: secrets + Self.secretValues(in: session))
+    }
+
+    private static func secretValues(in session: StoredSession?) -> [String] {
         var values: [String] = []
         for cookie in session?.cookies ?? [] where cookie.value.count >= 6 || cookie.name == "session-id" {
             if !cookie.value.isEmpty { values.append(cookie.value) }
         }
-        secrets = Array(Set(values)).sorted { $0.count > $1.count }
+        return values
     }
-
-    public static let none = SecretRedactor(session: nil)
 
     public func redact(_ text: String) -> String {
         var result = text

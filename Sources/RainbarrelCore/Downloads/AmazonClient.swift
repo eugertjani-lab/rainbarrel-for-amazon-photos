@@ -86,6 +86,11 @@ public enum AmazonEndpoints {
 /// Cookies are sent in a `Cookie` header that is built here (the shared cookie storage is not used),
 /// only over https, and only to hosts that the cookies belong to. Redirects are followed only to
 /// Amazon, AWS and CloudFront hosts over https; any other target is refused.
+///
+/// The cookies change while the client runs: what Amazon sets in a successful answer (status 200 to
+/// 399, redirects included) replaces the old cookie of the same name, domain and path, and the next
+/// request uses it. A 403 does not mean that the sign-in is gone by itself: it is checked with one
+/// listing call first, and when that works the 403 is reported as throttling.
 public final class AmazonClient: @unchecked Sendable {
     public struct Timeouts: Sendable, Equatable {
         /// Longest wait for the answer to a request (and for the first byte of a file).
@@ -104,12 +109,13 @@ public final class AmazonClient: @unchecked Sendable {
     public static let userAgent = "Rainbarrel/\(RainbarrelInfo.version)"
 
     public let host: String
-    private let session: StoredSession
+    private let jar: SessionJar
     let timeouts: Timeouts
-    private let redactor: SecretRedactor
     private let allowedDomains: [String]
     private let ownDomain: String
     let streaming: StreamingSession
+    /// Shares the check that follows a 403 between requests that fail together.
+    let forbiddenCheck = ForbiddenCheck()
 
     public static func defaultConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
@@ -133,22 +139,40 @@ public final class AmazonClient: @unchecked Sendable {
             throw DownloadError.sessionInvalid("there is no unexpired session-id cookie")
         }
         self.host = host
-        self.session = session
         self.timeouts = timeouts
-        redactor = SecretRedactor(session: session)
+        let jar = SessionJar(session: session, host: host)
+        self.jar = jar
         allowedDomains = AmazonEndpoints.allowedRedirectDomains(forHost: host)
         ownDomain = AmazonEndpoints.registrableDomain(of: host)
         // Cookies are set by hand; nothing may add or store any.
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpCookieStorage = nil
-        streaming = StreamingSession(configuration: configuration)
+        streaming = StreamingSession(configuration: configuration, onResponse: { jar.accept($0) })
     }
 
     deinit { streaming.invalidate() }
 
     /// Cancel everything that is still running and release the connection pool.
     public func invalidate() { streaming.invalidate() }
+
+    // MARK: The session while it runs
+
+    /// The session with the cookies as they are now (refreshed cookies merged in). `host` and
+    /// `savedAt` are those of the sign-in.
+    var currentSession: StoredSession { jar.current }
+
+    /// Hides every cookie value this client has held.
+    var redactor: SecretRedactor { jar.redactor }
+
+    /// Changes whenever the cookies change.
+    var cookieGeneration: Int { jar.generation }
+
+    /// Changes whenever the whole session is replaced by another sign-in.
+    var sessionEpoch: Int { jar.epoch }
+
+    /// Continue with another sign-in. Requests that are already on their way keep what they sent.
+    func replaceSession(_ session: StoredSession) { jar.replace(with: session) }
 
     // MARK: Requests
 
@@ -159,7 +183,7 @@ public final class AmazonClient: @unchecked Sendable {
         let response = try await streaming.perform(
             try request(for: url), timeouts: timeouts, collectLimit: 1_000_000, onData: nil,
             redirect: { [self] in redirectRequest(to: $0) })
-        try check(response)
+        try await check(response)
         struct Payload: Decodable {
             struct Properties: Decodable { var md5: String?; var size: Int64? }
             var name: String?
@@ -184,7 +208,7 @@ public final class AmazonClient: @unchecked Sendable {
         let response = try await streaming.perform(
             try request(for: url), timeouts: timeouts, collectLimit: 0, onData: onData,
             redirect: { [self] in redirectRequest(to: $0) })
-        try check(response)
+        try await check(response)
         // A sign-in page that comes back with status 200 would otherwise be taken for the file.
         if !expectsHTML, response.contentType?.lowercased().hasPrefix("text/html") == true {
             throw DownloadError.sessionExpired
@@ -213,12 +237,12 @@ public final class AmazonClient: @unchecked Sendable {
 
     /// Cookies go to hosts they belong to; the session id header only to Amazon's own domain.
     private func applyCredentials(to request: inout URLRequest, url: URL) {
-        let now = Date()
-        if let cookie = CookieMatching.header(for: url, cookies: session.cookies, now: now) {
+        let credentials = jar.credentials(for: url, now: Date())
+        if let cookie = credentials.cookie {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
         }
         if let host = url.host?.lowercased(), host == ownDomain || host.hasSuffix("." + ownDomain),
-            let id = session.sessionID(at: now)
+            let id = credentials.sessionID
         {
             request.setValue(id, forHTTPHeaderField: "x-amzn-sessionid")
         }
@@ -233,18 +257,45 @@ public final class AmazonClient: @unchecked Sendable {
 
     // MARK: Answers
 
-    func check(_ response: StreamingSession.Response) throws {
+    /// Maps the answer to an error. 401 means the sign-in is gone. A 403 can also come from throttling
+    /// or bot defence, so it is checked first (`confirmForbidden`): when a listing call still works
+    /// the 403 is reported as throttling, and only when that call fails too is the sign-in gone.
+    /// The listing call of that check passes `false`, so that the check never checks itself.
+    func check(_ response: StreamingSession.Response, confirmForbidden: Bool = true) async throws {
         switch response.status {
         case 200:
             return
-        case 401, 403:
+        case 401:
             throw DownloadError.sessionExpired
+        case 403:
+            guard confirmForbidden else { throw DownloadError.sessionExpired }
+            try await confirmSessionAfterForbidden()
+            throw DownloadError.throttled(status: 403, retryAfter: nil)
         case 408:
             throw DownloadError.network("the request timed out")
         case 429, 500...599:
             throw DownloadError.throttled(status: response.status, retryAfter: Self.parseRetryAfter(response.retryAfter))
         default:
             throw DownloadError.httpStatus(response.status)
+        }
+    }
+
+    /// Returns when the session still works. Throws `sessionExpired` when Amazon refuses it. Callers
+    /// that arrive while a check runs wait for its answer, and a good answer holds for 30 seconds. Any
+    /// other trouble of the check counts as more throttling, except throttle and network answers,
+    /// which are passed on as they are.
+    private func confirmSessionAfterForbidden() async throws {
+        do {
+            try await forbiddenCheck.confirm { [self] in _ = try await verifySession() }
+        } catch DownloadError.sessionExpired {
+            throw DownloadError.sessionExpired
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as DownloadError {
+            switch error {
+            case .throttled, .network: throw error
+            default: throw DownloadError.throttled(status: 403, retryAfter: nil)
+            }
         }
     }
 
@@ -313,8 +364,11 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
     private let lock = NSLock()
     private var calls: [Int: Call] = [:]
     private var session: URLSession!
+    /// Told about every answer the server sends, redirects included, before the call goes on.
+    private let onResponse: @Sendable (HTTPURLResponse) -> Void
 
-    init(configuration: URLSessionConfiguration) {
+    init(configuration: URLSessionConfiguration, onResponse: @escaping @Sendable (HTTPURLResponse) -> Void = { _ in }) {
+        self.onResponse = onResponse
         super.init()
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
@@ -383,6 +437,7 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
             return
         }
         call.response = response as? HTTPURLResponse
+        if let http = call.response { onResponse(http) }
         call.touch()
         completionHandler(.allow)
     }
@@ -419,6 +474,7 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
             return
         }
         call.touch()
+        onResponse(response)
         if let safe = call.redirect(url) {
             completionHandler(safe)
         } else {
@@ -469,5 +525,47 @@ final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Senda
             }
         }
         return "transport error"
+    }
+}
+
+/// Lets requests that fail with a 403 at the same time share one check of the session, and keeps a
+/// good answer for a while so that a burst of 403s does not become a burst of checks.
+final class ForbiddenCheck: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running: Task<Void, Error>?
+    private var goodUntil: TimeInterval?
+    private var cacheSeconds: TimeInterval = 30
+
+    /// How long a good answer holds.
+    var cacheDuration: TimeInterval {
+        get { lock.withLock { cacheSeconds } }
+        set { lock.withLock { cacheSeconds = newValue } }
+    }
+
+    /// Run `check` unless a good answer is still fresh; join it when it is already running.
+    func confirm(_ check: @escaping @Sendable () async throws -> Void) async throws {
+        let task: Task<Void, Error>? = lock.withLock {
+            if let goodUntil, ProcessInfo.processInfo.systemUptime < goodUntil { return nil }
+            if let running { return running }
+            let started = Task { [self] in
+                do {
+                    try await check()
+                    finish(good: true)
+                } catch {
+                    finish(good: false)
+                    throw error
+                }
+            }
+            running = started
+            return started
+        }
+        try await task?.value
+    }
+
+    private func finish(good: Bool) {
+        lock.withLock {
+            running = nil
+            if good { goodUntil = ProcessInfo.processInfo.systemUptime + cacheSeconds }
+        }
     }
 }
