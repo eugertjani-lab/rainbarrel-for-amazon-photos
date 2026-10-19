@@ -357,7 +357,8 @@ struct DownloadEngineTests {
         let a = file("A", "IMG_0001.jpg", size: 5000, seed: 1)
         let b = file("B", "IMG_0001.jpg", size: 5000, seed: 2)
         let fx = try DownloadFixture(files: [a, b])
-        fx.server.responseDelay = 0.05  // both downloads are in flight together
+        // Long enough that the second download starts while the first is still in flight, also on a slow CI runner.
+        fx.server.responseDelay = 0.5
         let summary = try await fx.run(DownloadOptions(concurrency: 2))
         #expect(summary.filesDownloaded == 2)
         let one = fx.contents("\(phone)/IMG_0001.jpg")
