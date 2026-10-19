@@ -63,9 +63,11 @@ final class SessionJar: @unchecked Sendable {
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": header], for: url)
         guard !parsed.isEmpty else { return false }
         let now = Date()
+        let maxAges = SessionCookieMerge.maxAges(inSetCookie: header)
         return lock.withLock {
             let merged = SessionCookieMerge.apply(
-                parsed, to: session.cookies, responseHost: url.host ?? "", configuredHost: host, now: now)
+                parsed, to: session.cookies, responseHost: url.host ?? "", configuredHost: host, now: now,
+                maxAges: maxAges)
             guard merged != session.cookies else { return false }
             session.cookies = merged
             hidden = hidden.adding(session)
@@ -93,14 +95,21 @@ enum SessionCookieMerge {
     /// - a cookie replaces the one with the same name, domain and path, or is added;
     /// - a cookie that arrives already expired (an `Expires` in the past, or `Max-Age=0`) removes the
     ///   one with the same name, domain and path.
+    ///
+    /// `maxAges` holds the `Max-Age` of each cookie by name, read from the raw header with
+    /// `maxAges(inSetCookie:)`. Foundation on Linux ignores that attribute, so it is applied here, and
+    /// it wins over `Expires` as RFC 6265 asks.
     static func apply(
         _ setCookies: [HTTPCookie], to cookies: [SessionCookie], responseHost: String, configuredHost: String,
-        now: Date
+        now: Date, maxAges: [String: Int] = [:]
     ) -> [SessionCookie] {
         let candidates = setCookies.map { cookie in
-            SessionCookie(
+            let expiresAt = maxAges[cookie.name].map { seconds in
+                seconds > 0 ? now.addingTimeInterval(TimeInterval(seconds)) : Date(timeIntervalSince1970: 0)
+            } ?? cookie.expiresDate
+            return SessionCookie(
                 name: cookie.name, value: cookie.value, domain: cookie.domain,
-                path: cookie.path.isEmpty ? "/" : cookie.path, expiresAt: cookie.expiresDate, secure: cookie.isSecure)
+                path: cookie.path.isEmpty ? "/" : cookie.path, expiresAt: expiresAt, secure: cookie.isSecure)
         }
         // The sign-in filter, run as if nothing had expired yet, so that expiry can still remove cookies.
         let allowed = WebSignIn.sessionCookies(from: candidates, host: configuredHost, now: .distantPast)
@@ -129,4 +138,42 @@ enum SessionCookieMerge {
     }
 
     private static func normalizedPath(_ path: String) -> String { path.isEmpty ? "/" : path }
+
+    /// The `Max-Age` of each cookie in a `Set-Cookie` value, by cookie name. Several cookies in one
+    /// value are separated by commas, and a comma only starts a new cookie when a `name=` follows it
+    /// before the next `;`, which keeps the comma inside an `Expires` date where it belongs.
+    static func maxAges(inSetCookie header: String) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for cookie in splitCookies(header) {
+            let fields = cookie.split(separator: ";", omittingEmptySubsequences: false)
+            guard let first = fields.first, let equals = first.firstIndex(of: "=") else { continue }
+            let name = first[..<equals].trimmingCharacters(in: .whitespaces)
+            for attribute in fields.dropFirst() {
+                let pieces = attribute.split(separator: "=", maxSplits: 1)
+                guard pieces.count == 2,
+                    pieces[0].trimmingCharacters(in: .whitespaces).lowercased() == "max-age",
+                    let seconds = Int(pieces[1].trimmingCharacters(in: .whitespaces))
+                else { continue }
+                result[name] = seconds
+            }
+        }
+        return result
+    }
+
+    private static func splitCookies(_ header: String) -> [Substring] {
+        var cookies: [Substring] = []
+        var start = header.startIndex
+        var index = header.startIndex
+        while let comma = header[index...].firstIndex(of: ",") {
+            let rest = header[header.index(after: comma)...]
+            let field = rest.prefix { $0 != ";" && $0 != "," }
+            if field.contains("=") {
+                cookies.append(header[start..<comma])
+                start = header.index(after: comma)
+            }
+            index = header.index(after: comma)
+        }
+        cookies.append(header[start...])
+        return cookies
+    }
 }

@@ -117,6 +117,14 @@ struct SessionRefreshTests {
         #expect(jar.generation == generation)
     }
 
+    @Test func maxAgeIsReadFromTheRawHeader() {
+        // Foundation on Linux ignores Max-Age, so the jar reads it itself. A comma inside an Expires
+        // date does not start a new cookie.
+        let header = "a=1; Expires=Wed, 18 Oct 2027 02:48:05 GMT; Max-Age=60, b=2; path=/; max-age = 0,c=3; Path=/"
+        #expect(SessionCookieMerge.maxAges(inSetCookie: header) == ["a": 60, "b": 0])
+        #expect(SessionCookieMerge.maxAges(inSetCookie: "d=4; Max-Age=soon").isEmpty)
+    }
+
     @Test func aDeletionOnAnotherPathLeavesTheCookieAlone() {
         let jar = SessionJar(session: signIn(), host: "www.amazon.com")
         jar.accept(answer(cookies: ["session-token=; Domain=.amazon.com; Path=/gp; Max-Age=0"]))
