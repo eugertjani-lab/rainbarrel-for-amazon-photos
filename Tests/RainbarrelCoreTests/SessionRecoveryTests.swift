@@ -98,15 +98,27 @@ struct ForbiddenAnswerTests {
         }
     }
 
-    @Test func a401IsExpiryWithoutAnyCheck() async throws {
+    @Test func a401IsExpiryWhenTheSessionCheckIsRefusedToo() async throws {
         let fx = try DownloadFixture(files: [item("N1", "a.jpg")])
         fx.overrideContent { _, _ in .body(Data(), status: 401) }
+        fx.overrideListing { _ in .body(Data(), status: 401) }
         let client = try makeClient(fx)
         defer { client.invalidate() }
         await #expect(throws: DownloadError.sessionExpired) {
             try await client.downloadContent(nodeId: "N1") { _ in 0 }
         }
-        #expect(fx.listingRequests.isEmpty)
+        #expect(fx.listingRequests.count == 1)
+    }
+
+    @Test func a401IsOnlyThatFilesRefusalWhenTheSessionCheckPasses() async throws {
+        let fx = try DownloadFixture(files: [item("N1", "a.jpg")])
+        fx.overrideContent { _, _ in .body(Data(), status: 401) }
+        let client = try makeClient(fx)
+        defer { client.invalidate() }
+        await #expect(throws: DownloadError.refusedFile("Amazon refused this file (HTTP 401)")) {
+            try await client.downloadContent(nodeId: "N1") { _ in 0 }
+        }
+        #expect(fx.listingRequests.count == 1)
     }
 
     @Test func verifySessionTreatsA403AsFinal() async throws {
@@ -469,6 +481,7 @@ struct SessionRecoveryEngineTests {
     @Test func withoutANewerSignInTheRunStopsAsBefore() async throws {
         let fx = try DownloadFixture(files: [item("N1", "a.jpg"), item("N2", "b.jpg", seed: 2)])
         fx.overrideContent { _, _ in .body(Data(), status: 401) }
+        fx.overrideListing { _ in .body(Data(), status: 401) }
         let store = CountingStore(fx.session)
         let summary = try await fx.run(DownloadOptions(concurrency: 1), sessionStore: store)
         #expect(summary.stopReason == .sessionExpired)

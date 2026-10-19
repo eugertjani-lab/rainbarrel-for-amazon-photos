@@ -10,6 +10,8 @@ public enum DownloadError: Error, CustomStringConvertible, LocalizedError, Senda
     case throttled(status: Int, retryAfter: TimeInterval?)
     case network(String)
     case httpStatus(Int)
+    /// Amazon will not hand out this one file although the sign-in works.
+    case refusedFile(String)
     case redirectRefused(host: String)
     case insecureURL
     case invalidHost(String)
@@ -42,6 +44,8 @@ public enum DownloadError: Error, CustomStringConvertible, LocalizedError, Senda
             return "Network problem: \(detail)"
         case .httpStatus(let status):
             return "Amazon answered HTTP \(status)"
+        case .refusedFile(let reason):
+            return reason
         case .redirectRefused(let host):
             return "Refused a redirect to \(host), which is not an Amazon host"
         case .insecureURL:

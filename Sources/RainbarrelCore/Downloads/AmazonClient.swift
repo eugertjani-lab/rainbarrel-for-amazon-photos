@@ -183,7 +183,7 @@ public final class AmazonClient: @unchecked Sendable {
         let response = try await streaming.perform(
             try request(for: url), timeouts: timeouts, collectLimit: 1_000_000, onData: nil,
             redirect: { [self] in redirectRequest(to: $0) })
-        try await check(response)
+        try await check(response, refusesSingleFile: true)
         struct Payload: Decodable {
             struct Properties: Decodable { var md5: String?; var size: Int64? }
             var name: String?
@@ -200,18 +200,30 @@ public final class AmazonClient: @unchecked Sendable {
     /// Stream the original file of `nodeId` to `onData`. `onData` runs for every chunk, in order and
     /// one at a time; it returns how long the transfer should pause afterwards (0 for none) and may
     /// throw to abort the transfer, in which case that error is thrown from here.
+    ///
+    /// A web page that comes back with status 200 for a file that is not expected to be HTML is
+    /// either a sign-in page or a file that Amazon refuses to hand out. A page whose size equals
+    /// `expectedSize` is taken for the file itself, so that the caller's own size and MD5 checks decide.
+    /// Otherwise a session check tells the two apart: `sessionExpired` when the sign-in is gone, and
+    /// `refusedFile` for this one file when it still works.
     public func downloadContent(
-        nodeId: String, expectsHTML: Bool = false,
+        nodeId: String, expectsHTML: Bool = false, expectedSize: Int64? = nil,
         onData: @escaping @Sendable (Data) throws -> TimeInterval
     ) async throws {
         let url = try AmazonEndpoints.contentURL(host: host, nodeId: nodeId)
+        let received = AttemptBytes()
         let response = try await streaming.perform(
-            try request(for: url), timeouts: timeouts, collectLimit: 0, onData: onData,
+            try request(for: url), timeouts: timeouts, collectLimit: 0,
+            onData: { data in
+                received.add(data.count)
+                return try onData(data)
+            },
             redirect: { [self] in redirectRequest(to: $0) })
-        try await check(response)
-        // A sign-in page that comes back with status 200 would otherwise be taken for the file.
+        try await check(response, refusesSingleFile: true)
         if !expectsHTML, response.contentType?.lowercased().hasPrefix("text/html") == true {
-            throw DownloadError.sessionExpired
+            if let expectedSize, received.value == expectedSize { return }
+            try await confirmSessionAfterForbidden()
+            throw DownloadError.refusedFile("Amazon answered with a web page instead of the file")
         }
     }
 
@@ -261,12 +273,18 @@ public final class AmazonClient: @unchecked Sendable {
     /// or bot defence, so it is checked first (`confirmForbidden`): when a listing call still works
     /// the 403 is reported as throttling, and only when that call fails too is the sign-in gone.
     /// The listing call of that check passes `false`, so that the check never checks itself.
-    func check(_ response: StreamingSession.Response, confirmForbidden: Bool = true) async throws {
+    /// A call for one file of a download passes `refusesSingleFile`: its 401 is checked the same way,
+    /// and when the sign-in still works only that file is refused.
+    func check(
+        _ response: StreamingSession.Response, confirmForbidden: Bool = true, refusesSingleFile: Bool = false
+    ) async throws {
         switch response.status {
         case 200:
             return
         case 401:
-            throw DownloadError.sessionExpired
+            guard confirmForbidden, refusesSingleFile else { throw DownloadError.sessionExpired }
+            try await confirmSessionAfterForbidden()
+            throw DownloadError.refusedFile("Amazon refused this file (HTTP 401)")
         case 403:
             guard confirmForbidden else { throw DownloadError.sessionExpired }
             try await confirmSessionAfterForbidden()

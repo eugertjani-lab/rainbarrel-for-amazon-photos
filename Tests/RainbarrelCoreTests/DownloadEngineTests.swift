@@ -148,10 +148,56 @@ struct DownloadEngineTests {
     @Test func aSignInPageWithStatus200IsNotTakenForTheFile() async throws {
         let fx = try DownloadFixture(files: [file("N1", "a.jpg")])
         fx.overrideStorage { _, _ in .body(Data("<html>sign in</html>".utf8), headers: ["Content-Type": "text/html; charset=utf-8"]) }
+        // The session check is refused too, so the page really was a sign-in page.
+        fx.overrideListing { _ in .body(Data(), status: 401) }
         let summary = try await fx.run(DownloadOptions(concurrency: 1))
         #expect(summary.stopReason == .sessionExpired)
         #expect(fx.driveFiles().isEmpty)
         #expect(try fx.job("N1")?.status == .pending)
+    }
+
+    @Test func aWebPageForOneFileFailsThatFileAfterASessionCheckAndTheRunGoesOn() async throws {
+        let fx = try DownloadFixture(files: [
+            file("N1", "a.jpg", seed: 1, takenAt: t2020), file("N2", "b.jpg", seed: 2, takenAt: t2019),
+            file("N3", "c.jpg", seed: 3, takenAt: t2015),
+        ])
+        fx.overrideStorage { id, _ in
+            id == "N2" ? .body(Data("<html>nothing here</html>".utf8), headers: ["Content-Type": "text/html"]) : nil
+        }
+        let summary = try await fx.run(DownloadOptions(concurrency: 1))
+        #expect(summary.stopReason == nil)
+        #expect(summary.filesDownloaded == 2 && summary.filesFailed == 1)
+        #expect(fx.listingRequests.count == 1)
+        let job = try #require(try fx.job("N2"))
+        #expect(job.lastError == "Amazon answered with a web page instead of the file")
+        #expect(job.attempts == 1)
+        #expect(try fx.job("N1")?.status == .done && fx.job("N3")?.status == .done)
+        #expect(fx.driveFiles().count == 2)
+    }
+
+    @Test func a401ForOneFileFailsThatFileAfterASessionCheckAndTheRunGoesOn() async throws {
+        let fx = try DownloadFixture(files: [
+            file("N1", "a.jpg", seed: 1, takenAt: t2020), file("N2", "b.jpg", seed: 2, takenAt: t2019),
+            file("N3", "c.jpg", seed: 3, takenAt: t2015),
+        ])
+        fx.overrideContent { id, _ in id == "N2" ? .body(Data(), status: 401) : nil }
+        let summary = try await fx.run(DownloadOptions(concurrency: 1))
+        #expect(summary.stopReason == nil)
+        #expect(summary.filesDownloaded == 2 && summary.filesFailed == 1)
+        let job = try #require(try fx.job("N2"))
+        #expect(job.lastError == "Amazon refused this file (HTTP 401)")
+        #expect(job.attempts == 1)
+        #expect(try fx.job("N1")?.status == .done && fx.job("N3")?.status == .done)
+    }
+
+    @Test func aFileWhoseContentIsHTMLDownloadsEvenWithoutAnHTMLName() async throws {
+        let page = TestFile(nodeId: "H1", name: "catalog.pdf", data: Data("<html>telerilevamento</html>".utf8), folder: "F-DOCS")
+        let fx = try DownloadFixture(files: [page])
+        fx.overrideStorage { _, _ in .body(page.data, headers: ["Content-Type": "text/html; charset=utf-8"]) }
+        let summary = try await fx.run()
+        #expect(summary.stopReason == nil && summary.filesDownloaded == 1 && summary.filesFailed == 0)
+        #expect(fx.contents("Amazon Drive/Docs/catalog.pdf") == page.data)
+        #expect(fx.listingRequests.isEmpty)
     }
 
     @Test func anHTMLFileMayLegitimatelyComeAsHTML() async throws {
@@ -180,6 +226,7 @@ struct DownloadEngineTests {
     @Test func anExpiredSessionStopsTheRunAndIsNeverRetried() async throws {
         let fx = try DownloadFixture(files: [file("N1", "a.jpg", seed: 1, takenAt: t2020), file("N2", "b.jpg", seed: 2)])
         fx.overrideContent { _, _ in .body(Data(#"{"message":"No Auth Method Provided"}"#.utf8), status: 401) }
+        fx.overrideListing { _ in .body(Data(), status: 401) }  // the session check agrees
         let summary = try await fx.run(DownloadOptions(concurrency: 1))
         #expect(summary.stopReason == .sessionExpired)
         #expect(summary.stopReason?.description == "Amazon session expired: sign in again")

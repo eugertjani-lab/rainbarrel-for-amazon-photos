@@ -828,6 +828,11 @@ final class RunContext: @unchecked Sendable {
                 case .httpStatus, .redirectRefused, .invalidResponse, .invalidNodeId, .insecureURL, .invalidHost:
                     await fail(job, error: error, verification: false, permanent: true)
                     return
+                case .refusedFile:
+                    // Only this file: attempts count across runs and the run goes on with the next one.
+                    unlink(part)
+                    await fail(job, error: error, verification: false, permanent: false)
+                    return
                 case .fileSystem, .targetNotWritable, .pathEscapesRoot:
                     if isDriveGone() {
                         await ledger.release(job, now: clock.now())
@@ -866,7 +871,7 @@ final class RunContext: @unchecked Sendable {
         let pacer = pacer
         let expectsHTML = ["html", "htm", "xhtml"].contains(
             FileNameSanitizer.split(job.fileName).ext.dropFirst().lowercased())
-        try await client.downloadContent(nodeId: job.nodeId, expectsHTML: expectsHTML) { data in
+        try await client.downloadContent(nodeId: job.nodeId, expectsHTML: expectsHTML, expectedSize: job.size) { data in
             try writer.append(data)
             attemptBytes.add(data.count)
             let now = Date()
