@@ -157,7 +157,8 @@ enum PlanPrinter {
 private enum Confirmation {
     static func ask(_ question: String) -> Bool {
         print(question + " [y/N] ", terminator: "")
-        fflush(stdout)
+        // fflush(nil) flushes every stream; naming `stdout` is refused on Linux, where it is a mutable global.
+        fflush(nil)
         guard let line = readLine() else { return false }
         return ["y", "yes"].contains(line.trimmingCharacters(in: .whitespaces).lowercased())
     }
