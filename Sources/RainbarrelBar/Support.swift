@@ -63,9 +63,11 @@ struct PanelButtonStyle: ButtonStyle {
 
     let kind: Kind
     var accent: Color = .accentColor
+    /// Side padding of the `.secondary` and `.secondaryFill` kinds.
+    var horizontalPadding: CGFloat = 14
 
     func makeBody(configuration: Configuration) -> some View {
-        PanelButtonBody(configuration: configuration, kind: kind, accent: accent)
+        PanelButtonBody(configuration: configuration, kind: kind, accent: accent, horizontalPadding: horizontalPadding)
     }
 }
 
@@ -73,6 +75,7 @@ private struct PanelButtonBody: View {
     let configuration: ButtonStyle.Configuration
     let kind: PanelButtonStyle.Kind
     let accent: Color
+    let horizontalPadding: CGFloat
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -87,13 +90,13 @@ private struct PanelButtonBody: View {
             case .secondary:
                 configuration.label
                     .foregroundStyle(Color.primary)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, horizontalPadding)
                     .frame(minHeight: 44)
                     .background(shape.fill(Color.primary.opacity(0.09)))
             case .secondaryFill:
                 configuration.label
                     .foregroundStyle(Color.primary)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, horizontalPadding)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(shape.fill(Color.primary.opacity(0.09)))
             case .icon:
@@ -187,5 +190,44 @@ enum FolderPicker {
         if let message { panel.message = message }
         panel.directoryURL = URL(fileURLWithPath: path.isEmpty ? "/Volumes" : path)
         return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+}
+
+/// Keeps the hosting window of a view at a given content size, in both directions, with the top
+/// edge fixed. A menu-bar window grows with its content but does not shrink back reliably.
+struct PanelWindowSizer: NSViewRepresentable {
+    let contentSize: NSSize
+
+    func makeNSView(context: Context) -> SizingView { SizingView() }
+
+    func updateNSView(_ view: SizingView, context: Context) {
+        view.contentSize = contentSize
+    }
+
+    final class SizingView: NSView {
+        var contentSize: NSSize = .zero {
+            didSet { if contentSize != oldValue { scheduleApply() } }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scheduleApply()
+        }
+
+        // The window is touched after the current SwiftUI update, never inside it.
+        private func scheduleApply() {
+            DispatchQueue.main.async { [weak self] in self?.apply() }
+        }
+
+        private func apply() {
+            guard let window, contentSize.width > 0, contentSize.height > 1 else { return }
+            let current = window.contentRect(forFrameRect: window.frame).size
+            guard abs(current.height - contentSize.height) > 0.5 || abs(current.width - contentSize.width) > 0.5
+            else { return }
+            var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize))
+            frame.origin.x = window.frame.origin.x
+            frame.origin.y = window.frame.maxY - frame.height
+            window.setFrame(frame, display: true, animate: false)
+        }
     }
 }

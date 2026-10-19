@@ -17,6 +17,8 @@ APP="build/Rainbarrel.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/RainbarrelBar" "$APP/Contents/MacOS/Rainbarrel"
+# The icon is drawn by scripts/make-icon.swift; regenerate it with: swift scripts/make-icon.swift Resources
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +29,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>Rainbarrel</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Rainbarrel</string>
     <key>CFBundleDisplayName</key>
@@ -48,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2026 Rainbarrel contributors. MIT License.</string>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>Rainbarrel reads your backup drive to find out which photos and videos are already backed up. It never writes to the drive.</string>
+    <string>Rainbarrel reads your backup drive to find out which photos and videos are already backed up, and writes the missing ones there when you download them.</string>
 </dict>
 </plist>
 PLIST
@@ -56,6 +62,13 @@ PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --strict "$APP"
+
+# Keep the build copy out of Spotlight and the Open With list, so only the copy in /Applications
+# is offered. Harmless when lsregister is missing or fails.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -x "$LSREGISTER" ]; then
+    "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+fi
 
 echo "Built $APP (version $VERSION)"
 echo "Open it with: open $APP"
