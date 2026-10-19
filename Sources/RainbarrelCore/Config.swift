@@ -16,13 +16,15 @@ public struct Config: Codable, Sendable, Equatable {
     /// Where the cloud catalog is read from: the desktop app's index, Amazon's web API, or (the
     /// default) the index when it is found and the web API otherwise.
     public var catalogSource: CatalogSourceChoice
+    /// Limits for changes to the Amazon library (see `AmazonWritesConfig`).
+    public var amazonWrites: AmazonWritesConfig
 
     public static let defaultAmazonHost = "www.amazon.com"
 
     public init(
         driveRoot: String? = nil, scanSubpath: String? = nil, amazonIndexPath: String? = nil,
         amazonHost: String? = nil, throttle: ThrottleConfig = ThrottleConfig(),
-        catalogSource: CatalogSourceChoice = .auto
+        catalogSource: CatalogSourceChoice = .auto, amazonWrites: AmazonWritesConfig = AmazonWritesConfig()
     ) {
         self.driveRoot = driveRoot
         self.scanSubpath = scanSubpath
@@ -30,6 +32,7 @@ public struct Config: Codable, Sendable, Equatable {
         self.amazonHost = amazonHost
         self.throttle = throttle
         self.catalogSource = catalogSource
+        self.amazonWrites = amazonWrites
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,6 +45,10 @@ public struct Config: Codable, Sendable, Equatable {
         // An unknown value falls back to the default, so a typo in the file never stops the app from starting.
         catalogSource = (try container.decodeIfPresent(String.self, forKey: .catalogSource))
             .flatMap { CatalogSourceChoice(rawValue: $0) } ?? .auto
+        // Writes are the riskiest thing the tool does, so a damaged section falls back to the defaults
+        // (the 50-step cap) instead of stopping the app from starting.
+        amazonWrites = (try? container.decodeIfPresent(AmazonWritesConfig.self, forKey: .amazonWrites)) ?? nil
+            ?? AmazonWritesConfig()
     }
 
     /// The Amazon host to talk to, lowercased.

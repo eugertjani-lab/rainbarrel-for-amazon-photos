@@ -6,7 +6,7 @@ struct ConfigCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "config",
         abstract: "Show or change the configuration.",
-        subcommands: [Show.self, SetDrive.self, SetIndex.self, SetCatalogSource.self, SetThrottle.self],
+        subcommands: [Show.self, SetDrive.self, SetIndex.self, SetCatalogSource.self, SetThrottle.self, SetWrites.self],
         defaultSubcommand: Show.self
     )
 
@@ -33,6 +33,8 @@ struct ConfigCommand: ParsableCommand {
                 + (config.amazonHost == nil ? "  (default)" : ""))
             print("throttle (downloads):")
             for line in config.throttle.summaryLines { print("  " + line) }
+            print("amazonWrites (plans):")
+            for line in config.amazonWrites.summaryLines { print("  " + line) }
         }
     }
 
@@ -156,6 +158,33 @@ struct ConfigCommand: ParsableCommand {
                 try store.save(config)
             }
             for line in throttle.summaryLines { print(line) }
+        }
+    }
+    struct SetWrites: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "set-writes",
+            abstract: "Set how many steps one `rainbarrel apply` performs.",
+            discussion: """
+                One apply call performs at most this many steps and leaves the rest of the plan for the next \
+                call, so that the result of a first run can be checked on the Amazon Photos website. The \
+                default is 50; 0 lifts the limit.
+                """)
+
+        @Option(name: .customLong("max-steps"), help: "Most steps per apply call. 0 means no limit.")
+        var maxSteps: Int?
+
+        func run() throws {
+            let paths = AppPaths.forCLI()
+            let store = ConfigStore(url: paths.configURL)
+            var config = try store.load()
+            var writes = config.amazonWrites
+            if let maxSteps { writes.maxStepsPerApply = maxSteps }
+            try writes.validate()
+            if writes != config.amazonWrites {
+                config.amazonWrites = writes
+                try store.save(config)
+            }
+            for line in writes.summaryLines { print(line) }
         }
     }
 }

@@ -14,13 +14,15 @@ struct Rainbarrel: AsyncParsableCommand {
             on the drive. Scanning and reporting never write to the drive. `rainbarrel download` is the one \
             command that does: it adds the missing files, never overwrites or deletes anything, and \
             verifies every file by MD5. `rainbarrel organize` moves files that are already on the drive \
-            into the same folder layout, without copying or deleting anything.
+            into the same folder layout, without copying or deleting anything. `rainbarrel plan`, `apply` and \
+            `undo` are the only commands that change your Amazon library: a plan is reviewed first, every step \
+            is checked against Amazon again, and nothing is ever purged.
             """,
         version: RainbarrelInfo.version,
         subcommands: [
             ConfigCommand.self, CatalogCommand.self, RefreshCatalog.self, ImportHashes.self, Scan.self, Status.self,
             OnlineOnly.self, DriveOnly.self, Download.self, DownloadStatus.self, Organize.self, AuthCommand.self, Mcp.self,
-            Sync.self,
+            Sync.self, PlanCommand.self, ApplyPlan.self, UndoPlan.self,
         ]
     )
 
