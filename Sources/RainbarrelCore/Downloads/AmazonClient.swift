@@ -247,6 +247,46 @@ public final class AmazonClient: @unchecked Sendable {
         return request
     }
 
+    /// The HTTP methods of the calls below `/drive/v1`. There is deliberately no DELETE: Rainbarrel
+    /// never purges a node or empties Amazon's trash.
+    enum DriveMethod: String {
+        case get = "GET"
+        case put = "PUT"
+        case patch = "PATCH"
+        case post = "POST"
+    }
+
+    /// The request for `/drive/v1/<segments>` with an explicit HTTP method, the standard query
+    /// (`resourceVersion=V2&ContentType=JSON`) unless `query` says otherwise, and the session's
+    /// credentials. A `body` is sent as JSON. Every path segment, the node ids and the fixed words
+    /// like `nodes` and `children` alike, passes `requireDriveSegment`, so that no id can change the path.
+    func driveRequest(
+        _ method: DriveMethod, _ segments: [String], query: String = AmazonEndpoints.apiQuery, body: Data? = nil
+    ) throws -> URLRequest {
+        var path = "/drive/v1"
+        for segment in segments {
+            try Self.requireDriveSegment(segment)
+            path += "/" + segment
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        components.percentEncodedPath = path
+        components.percentEncodedQuery = query
+        guard let url = components.url else { throw DownloadError.invalidHost(host) }
+        var request = try self.request(for: url, body: body)
+        request.httpMethod = method.rawValue
+        // A body-less PUT or POST (trash, restore) says so explicitly, as the calls verified live did.
+        if body == nil, method != .get { request.setValue("0", forHTTPHeaderField: "Content-Length") }
+        return request
+    }
+
+    /// Throws `invalidNodeId` unless `id` passes `AmazonEndpoints.isValidNodeId` and is not `.` or `..`.
+    /// Ids that only travel in a request body pass it too, before anything is sent.
+    static func requireDriveSegment(_ id: String) throws {
+        guard AmazonEndpoints.isValidNodeId(id), id != ".", id != ".." else { throw DownloadError.invalidNodeId(id) }
+    }
+
     /// Cookies go to hosts they belong to; the session id header only to Amazon's own domain.
     private func applyCredentials(to request: inout URLRequest, url: URL) {
         let credentials = jar.credentials(for: url, now: Date())
