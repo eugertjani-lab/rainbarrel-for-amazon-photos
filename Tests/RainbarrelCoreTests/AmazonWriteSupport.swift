@@ -151,6 +151,23 @@ final class WriteFixture: @unchecked Sendable {
         }
     }
 
+    /// Change a node behind a plan's back, as someone else would in the Amazon Photos app.
+    func modify(_ id: String, _ body: (inout Node) -> Void) {
+        update { state in
+            guard var node = state.nodes[id] else { return }
+            body(&node)
+            state.nodes[id] = node
+        }
+    }
+
+    /// Forget a node, as if Amazon had purged it: later reads answer 404.
+    func remove(_ id: String) {
+        update {
+            $0.nodes[id] = nil
+            $0.order.removeAll { $0 == id }
+        }
+    }
+
     var session: StoredSession {
         StoredSession(
             host: host,

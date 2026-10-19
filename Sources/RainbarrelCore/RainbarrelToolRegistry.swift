@@ -15,7 +15,7 @@ public struct ToolCallOutcome: Sendable, Equatable {
     public var isError: Bool
 }
 
-/// The nine MCP tools, independent of any transport. A transport lists `definitions` and forwards
+/// The eleven MCP tools, independent of any transport. A transport lists `definitions` and forwards
 /// calls to `call`, which never throws: failures come back as an error outcome with a readable message.
 public struct RainbarrelToolRegistry: Sendable {
     public static let maxListLimit = 500
@@ -169,6 +169,33 @@ public struct RainbarrelToolRegistry: Sendable {
                 "sample": integer("How many example moves to return.", minimum: 0, maximum: OrganizeService.maxSampleSize, defaultValue: OrganizeService.defaultSampleSize),
             ]),
             readOnly: true),
+        ToolDefinition(
+            name: "plan_create_cleanup_empty",
+            description: """
+                Make a draft plan that moves every photo and video of the catalog that was uploaded empty \
+                (0 bytes) to Amazon's trash, and return the plan with its summary (steps, bytes, how many \
+                are ticked). Reads the stored catalog and writes only the draft to Rainbarrel's own \
+                database: nothing is sent to Amazon, and there is no tool that applies a plan. The person \
+                reviews the plan and applies it in the app or with `rainbarrel apply <id>`; every \
+                step is checked against Amazon again right before it runs, and an applied plan can be \
+                undone. Rainbarrel never empties Amazon's trash. Returns created=false when there is no \
+                empty file.
+                """,
+            inputSchema: schema(),
+            readOnly: false),
+        ToolDefinition(
+            name: "plan_show",
+            description: """
+                Show a plan made by Rainbarrel: its title, status (draft, applying, applied, partlyApplied, \
+                undone), counts per operation with bytes, how many steps are ticked and in which state, and a \
+                sample of the first steps with what each does, why, and how it went. Makes no network call \
+                and changes nothing.
+                """,
+            inputSchema: schema([
+                "id": integer("The plan id, as `plan_create_cleanup_empty` or `rainbarrel plan list` shows it.", minimum: 1),
+                "sample": integer("How many of the first steps to return.", minimum: 0, maximum: PlanService.maxStepSample, defaultValue: PlanService.defaultStepSample),
+            ]),
+            readOnly: true),
     ]
 
     // MARK: Calls
@@ -214,6 +241,14 @@ public struct RainbarrelToolRegistry: Sendable {
             case "organize_preview":
                 let sample = try Self.int(args, "sample", range: 0...OrganizeService.maxSampleSize)
                 return try ok(tools.organizePreview(sample: sample ?? OrganizeService.defaultSampleSize))
+            case "plan_create_cleanup_empty":
+                return try ok(tools.planCreateCleanupEmpty())
+            case "plan_show":
+                guard let id = try Self.int(args, "id", range: 1...Int.max) else {
+                    throw ToolError("Argument `id` is required.")
+                }
+                let sample = try Self.int(args, "sample", range: 0...PlanService.maxStepSample)
+                return try ok(tools.planShow(id: Int64(id), sample: sample ?? PlanService.defaultStepSample))
             default:
                 return ToolCallOutcome(text: "Unknown tool: \(name)", isError: true)
             }

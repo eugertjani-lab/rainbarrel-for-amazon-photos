@@ -139,6 +139,45 @@ public final class StateStore {
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+            CREATE TABLE IF NOT EXISTS amazon_plans(
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                planner              TEXT NOT NULL,
+                title                TEXT NOT NULL,
+                created_at           INTEGER NOT NULL,
+                catalog_refreshed_at INTEGER,
+                status               TEXT NOT NULL,
+                applied_at           INTEGER,
+                undone_at            INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS amazon_plan_steps(
+                plan_id         INTEGER NOT NULL,
+                position        INTEGER NOT NULL,
+                operation       TEXT NOT NULL,
+                node_id         TEXT,
+                parent_id       TEXT,
+                from_value      TEXT,
+                to_value        TEXT,
+                reason          TEXT NOT NULL,
+                group_label     TEXT,
+                size            INTEGER NOT NULL DEFAULT 0,
+                included        INTEGER NOT NULL DEFAULT 1,
+                before_parent   TEXT,
+                before_name     TEXT,
+                before_status   TEXT,
+                before_md5      TEXT,
+                state           TEXT NOT NULL DEFAULT 'pending',
+                result          TEXT,
+                after_parent    TEXT,
+                after_name      TEXT,
+                after_status    TEXT,
+                inverse_value   TEXT,
+                created_node_id TEXT,
+                reused          INTEGER NOT NULL DEFAULT 0,
+                catalog_item    TEXT,
+                updated_at      INTEGER,
+                PRIMARY KEY(plan_id, position)
+            );
+            CREATE INDEX IF NOT EXISTS idx_amazon_plan_steps_state ON amazon_plan_steps(plan_id, state);
             CREATE TABLE IF NOT EXISTS scans(
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at   INTEGER NOT NULL,

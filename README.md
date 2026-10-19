@@ -13,7 +13,7 @@ Rainbarrel is a Swift package with three front ends on one shared library: a com
 
 Rainbarrel for Amazon Photos is an unofficial community project. It is not affiliated with, endorsed by or supported by Amazon. "Amazon" and "Amazon Photos" are trademarks of Amazon.com, Inc. or its affiliates.
 
-The tool reads the catalog of your library either from the local index database that the Amazon Photos desktop app keeps on your computer or from Amazon's private web API. The index file is an internal detail of the app, so Amazon can change its location or format at any time, and Rainbarrel may stop working without notice. Reading the catalog from the web API and downloading both talk to that API with your own signed-in session, an interface that Amazon has not published for third parties and can change or block at any time, possibly without notice. Amazon's terms of use may restrict automated access. Rainbarrel is intended for backing up your own account only, with conservative request limits by default. Use it at your own risk, and keep more than one copy of anything you care about.
+The tool reads the catalog of your library either from the local index database that the Amazon Photos desktop app keeps on your computer or from Amazon's private web API. The index file is an internal detail of the app, so Amazon can change its location or format at any time, and Rainbarrel may stop working without notice. Reading the catalog from the web API, downloading and changing the library (see [Changing Amazon Photos](#changing-amazon-photos)) all talk to that API with your own signed-in session, an interface that Amazon has not published for third parties and can change or block at any time, possibly without notice. Amazon's terms of use may restrict automated access. Rainbarrel is intended for backing up your own account only, with conservative request limits by default. Use it at your own risk, and keep more than one copy of anything you care about.
 
 ## How it works
 
@@ -296,6 +296,36 @@ Each run is written to a journal (the `organize_moves` table in `state.sqlite`, 
 
 `--prune-empty-dirs` removes, with `rmdir` only, the folders that the moves left empty and their parents that became empty because of that. It never touches a folder that was already empty before the run, a folder that still holds anything (a `.DS_Store` included), the scan folder itself, or anything above it.
 
+## Changing Amazon Photos
+
+Rainbarrel can also change your Amazon Photos library, and every change goes through a plan. A plan is an ordered list of steps that one planner worked out from the stored catalog, for example "move this empty file to Amazon's trash". Making a plan sends nothing to Amazon. The plan is a draft in the `amazon_plans` and `amazon_plan_steps` tables of `state.sqlite`, and you decide afterwards whether it runs. Changes use the same private web API and the same signed-in session as downloads, with the same risks (see the [disclaimer](#disclaimer)), so start with a small plan and look at the result on the Amazon Photos website.
+
+The first planner finds the files that were uploaded empty. `rainbarrel plan cleanup-empty` refreshes the catalog when it is more than ten minutes old and creates a draft with one trash step for every photo or video of 0 bytes, and for every empty Live Photo video. Each step carries its reason ("empty file (0 bytes)") and a record of what the item looked like when the plan was made: its folder, its name, its status and its MD5. The command prints the plan id and a summary such as "Trash 192 items (0 B)".
+
+### Reviewing a plan
+
+`rainbarrel plan list` shows every plan with its status, which is draft, applying, applied, partly applied or undone. `rainbarrel plan show <id>` shows one plan with its counts, its bytes and its largest folders, and `--steps` adds the steps themselves with their reasons and results. Steps are grouped by operation and by folder path, so a review can tick or untick a whole folder, and a step that is unticked is never applied. The ticking is meant for the review screen of the app, which is still to come, so for now every step of a plan runs. The MCP server can make a cleanup plan and show a plan (`plan_create_cleanup_empty` and `plan_show`). It has no tool that applies a plan, so an assistant can propose a change while the decision stays with you.
+
+### Applying a plan
+
+`rainbarrel apply <id>` prints the summary and asks for confirmation before it changes anything; `--yes` skips the question for scripts. It refreshes the catalog first, then takes the lock file that downloads and `organize` also take, so it never runs next to them. The steps run one at a time in plan order, under the request limit of the throttle settings, and Amazon's answers to throttling are waited out with the same backoff as downloads.
+
+Right before each step Rainbarrel reads the item from Amazon again. When its folder, name, status or MD5 differs from the record in the plan, something changed in the library after the plan was made, so the step is skipped and marked as changed meanwhile. An item that Amazon no longer knows is skipped the same way. After a write the item is read back, and the step counts as done only when the item shows the change. The local catalog follows each done step at once: a trashed item leaves it, a moved or renamed item gets its new folder or name, so `status` stays right without waiting for a refresh.
+
+A run stops at the first answer it cannot judge: an expired session, a refusal, a change that Amazon accepted but did not carry out, a name that is already taken, or throttling that lasts through several waits. The step is marked failed with the reason (cookie values are removed from it) and the plan shows as partly applied. The next `rainbarrel apply <id>` starts again with the failed step and then goes on with the steps behind it. Ctrl-C ends the run after the step in progress and resumes the same way.
+
+### The step limit
+
+One apply performs at most 50 steps. When more are left, the plan shows as partly applied with a message that says how many remain, so you can check the result on the Amazon Photos website before the next apply continues. `rainbarrel config set-writes --max-steps N` changes the limit and 0 lifts it; the value is stored in `config.json` as `amazonWrites.maxStepsPerApply`. Skipped steps involve no write and do not count toward the limit.
+
+### Undoing a plan
+
+`rainbarrel undo <id>` runs the opposite of every step that was done, last step first. Trashed items are restored, moved items go back to their folder, names and descriptions are put back, and a folder that the plan created is moved to the trash. Every item is compared with the state recorded right after the plan changed it, so an item that was changed again in the meantime is left alone and reported with the reason. The plan then shows as partly applied until a later undo has dealt with it. Undo takes the same lock and asks for confirmation in the same way, and the local catalog is put back as well.
+
+### Trash is never emptied
+
+Trashing is the strongest change Rainbarrel makes. It has no command and no code path that purges an item or empties Amazon's trash, so an applied plan stays reversible for as long as Amazon keeps its trash. Amazon leaves the files inside a trashed folder as they are, which is why a cleanup trashes files one by one and a folder only after it has been emptied.
+
 ## MCP server
 
 `rainbarrel mcp` runs an MCP server on stdin and stdout, built on the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). The server is called `rainbarrel` and offers these tools:
@@ -310,6 +340,8 @@ Each run is written to a journal (the `organize_moves` table in `state.sqlite`, 
 - `download_status` reports the download queue (waiting, downloading, done, failed, skipped and not queued yet), recent failures with reasons, the last run, whether a session is stored (never its values), the throttle settings, and whether the drive is mounted and writable. It makes no network call and writes nothing.
 - `download_batch` downloads up to `limit` of the newest missing files (default 10, at most 50, optional `year`) and returns when the batch is done, with one entry per file. It stops with a tool error when the session is missing or expired, when the drive is read-only or not mounted, or when the active hours are closed. It never waits for a window or a long pause; use the command line for large amounts.
 - `organize_preview` is the dry run of `rainbarrel organize`: counts of the files that would move, are already in place, are extra copies or are skipped (with the reasons), and a sample of moves (`sample`, default 20, at most 200) with paths relative to the drive root. It makes no network call and changes nothing. Moving the files is only possible on the command line with `rainbarrel organize --apply`.
+- `plan_create_cleanup_empty` makes a draft plan that moves the empty files of the catalog (0 bytes) to Amazon's trash and returns it with its summary. It reads the catalog and writes only the draft to Rainbarrel's own database. Nothing is sent to Amazon.
+- `plan_show` returns a plan with its status, its counts per operation and a sample of its steps (`sample`, default 20, at most 200). It makes no network call and changes nothing. No tool applies or undoes a plan; that is done with `rainbarrel apply` and `rainbarrel undo`, or in the app.
 
 Problems such as an unmounted drive, a missing Amazon index or an expired session come back as tool errors with a readable message.
 
@@ -369,7 +401,7 @@ build/Rainbarrel.app/Contents/MacOS/Rainbarrel --render-snapshot build/snapshot-
 - macOS: `~/Library/Application Support/Rainbarrel/`
 - Linux: `$XDG_DATA_HOME/rainbarrel`, or `~/.local/share/rainbarrel` when `XDG_DATA_HOME` is not set.
 
-The folder holds `config.json` (drive root, optional scan subpath, optional explicit path of the Amazon Photos index, the catalog source, the Amazon host and the throttle settings) and `state.sqlite`. While a download or an organize run is active it also holds `download.lock`, and `session.json` appears there when the session is kept in a file. Setting the environment variable `RAINBARREL_DATA_DIR` uses a different folder, which is handy for experiments (the old name `PHOTOMIRROR_DATA_DIR` still works but is deprecated). If the automatic detection of the Amazon Photos index picks the wrong file, point to the right one with `rainbarrel config set-index <path>`.
+The folder holds `config.json` (drive root, optional scan subpath, optional explicit path of the Amazon Photos index, the catalog source, the Amazon host, the throttle settings and the plan limit) and `state.sqlite`, which also holds the plans. While a download or an organize run is active it also holds `download.lock`, and `session.json` appears there when the session is kept in a file. Setting the environment variable `RAINBARREL_DATA_DIR` uses a different folder, which is handy for experiments (the old name `PHOTOMIRROR_DATA_DIR` still works but is deprecated). If the automatic detection of the Amazon Photos index picks the wrong file, point to the right one with `rainbarrel config set-index <path>`.
 
 ### Upgrading from PhotoMirror
 
@@ -377,7 +409,7 @@ Rainbarrel was previously called PhotoMirror. The first time Rainbarrel starts w
 
 ## Architecture
 
-- `Sources/RainbarrelCore` is the library that everything else builds on: the SQLite wrapper, the catalog sources (the Amazon Photos app index behind `CloudCatalogSource`, Amazon's web API behind `AsyncCloudCatalogSource`) and the refresher that replaces the catalog or applies the change feed, the state store, the drive scanner, the CSV importer, the reconciler that produces a `SyncReport`, the downloads engine (`Sources/RainbarrelCore/Downloads`: queue, target paths, HTTP client, session storage, throttling and the `DownloadEngine` that runs them, with progress reported through a callback so the app can reuse it), the organizer (`Sources/RainbarrelCore/Organize`: the planner that matches drive files to the catalog, the executor with its journal and undo, and `OrganizeService`), and `RainbarrelTools` with `RainbarrelToolRegistry`, the plain functions behind the MCP tools and the app.
+- `Sources/RainbarrelCore` is the library that everything else builds on: the SQLite wrapper, the catalog sources (the Amazon Photos app index behind `CloudCatalogSource`, Amazon's web API behind `AsyncCloudCatalogSource`) and the refresher that replaces the catalog or applies the change feed, the state store, the drive scanner, the CSV importer, the reconciler that produces a `SyncReport`, the downloads engine (`Sources/RainbarrelCore/Downloads`: queue, target paths, HTTP client, session storage, throttling and the `DownloadEngine` that runs them, with progress reported through a callback so the app can reuse it), the organizer (`Sources/RainbarrelCore/Organize`: the planner that matches drive files to the catalog, the executor with its journal and undo, and `OrganizeService`), and `RainbarrelTools` with `RainbarrelToolRegistry`, the plain functions behind the MCP tools and the app. Changes to the Amazon library live in `AmazonWrites`, the typed and verified write client, and in `AmazonPlans`, which holds the plans, the planners, apply and undo.
 - `Sources/rainbarrel` is the command line tool, built with swift-argument-parser. It also holds the thin adapter that exposes `RainbarrelToolRegistry` through the MCP Swift SDK, so the library itself has no MCP dependency.
 - `Sources/RainbarrelBar` is the menu-bar app. It is declared only on macOS, so Linux builds skip it.
 - `Sources/CSQLite` is a system library target that links the system SQLite on Linux. macOS uses the SQLite that ships with the SDK.

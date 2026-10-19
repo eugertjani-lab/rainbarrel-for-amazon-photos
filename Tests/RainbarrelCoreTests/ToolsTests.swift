@@ -131,11 +131,11 @@ struct ToolsTests {
 
     // MARK: Registry
 
-    @Test func definitionsDescribeTheNineToolsWithObjectSchemas() {
+    @Test func definitionsDescribeTheElevenToolsWithObjectSchemas() {
         let names = RainbarrelToolRegistry.definitions.map(\.name)
         #expect(names == [
             "sync_status", "list_online_only", "list_drive_only", "breakdown_by_year", "refresh_catalog", "scan_drive",
-            "download_status", "download_batch", "organize_preview",
+            "download_status", "download_batch", "organize_preview", "plan_create_cleanup_empty", "plan_show",
         ])
         for definition in RainbarrelToolRegistry.definitions {
             #expect(!definition.description.isEmpty)
