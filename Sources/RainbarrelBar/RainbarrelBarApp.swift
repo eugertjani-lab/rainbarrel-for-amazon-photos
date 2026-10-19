@@ -144,7 +144,7 @@ private struct PopoverRoot: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        PopoverView(model: model, openSettings: {
+        PopoverView(model: model, resizesWindow: true, openSettings: {
             openWindow(id: "settings")
             NSApp.activate(ignoringOtherApps: true)
         })

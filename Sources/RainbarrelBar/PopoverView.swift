@@ -7,6 +7,8 @@ struct PopoverView: View {
     let model: AppModel
     var openSettings: () -> Void = {}
     var quit: () -> Void = { NSApplication.shared.terminate(nil) }
+    /// True for the menu-bar panel, whose window does not shrink on its own when the content does.
+    var resizesWindow = false
 
     @State private var showingYears: Bool
     @State private var contentHeight: CGFloat = 0
@@ -22,10 +24,12 @@ struct PopoverView: View {
     init(
         model: AppModel,
         showYears: Bool = false,
+        resizesWindow: Bool = false,
         openSettings: @escaping () -> Void = {},
         quit: @escaping () -> Void = { NSApplication.shared.terminate(nil) }
     ) {
         self.model = model
+        self.resizesWindow = resizesWindow
         self.openSettings = openSettings
         self.quit = quit
         _showingYears = State(initialValue: showYears)
@@ -47,11 +51,18 @@ struct PopoverView: View {
                         })
                 }
                 .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-                .frame(height: min(max(contentHeight, 1), Self.maxHeight))
+                .frame(height: panelHeight)
+                .background {
+                    // A menu-bar window grows with its content but keeps its old height when the
+                    // content shrinks, which left a transparent strip below the panel.
+                    if resizesWindow { PanelWindowSizer(contentSize: NSSize(width: 360, height: panelHeight)) }
+                }
             }
         }
         .frame(width: 360)
     }
+
+    private var panelHeight: CGFloat { min(max(contentHeight, 1), Self.maxHeight) }
 
     private struct ContentHeightKey: PreferenceKey {
         static let defaultValue: CGFloat = 0
@@ -409,6 +420,28 @@ private struct ProblemView: View {
     }
 }
 
+/// Icon and title of a panel button, with a spinner in place of the icon while its action runs.
+private struct LabeledButtonFace: View {
+    let title: String
+    let symbol: String
+    let running: Bool
+    @Environment(\.isSnapshot) private var isSnapshot
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if running && !isSnapshot {
+                ProgressView().controlSize(.small).scaleEffect(0.8).frame(width: 16, height: 16)
+            } else {
+                Image(systemName: symbol).font(.system(size: 14, weight: .medium))
+            }
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+    }
+}
+
 private struct ButtonRow: View {
     let model: AppModel
     let openSettings: () -> Void
@@ -425,18 +458,22 @@ private struct ButtonRow: View {
                 .buttonStyle(PanelButtonStyle(kind: .secondary))
             } else {
                 Button { model.startScan() } label: {
-                    Text("Scan drive").font(.system(size: 14, weight: .semibold))
+                    LabeledButtonFace(title: "Scan drive", symbol: "externaldrive", running: false)
                 }
-                .buttonStyle(PanelButtonStyle(kind: .secondaryFill))
+                .buttonStyle(PanelButtonStyle(kind: .secondaryFill, horizontalPadding: 8))
                 .disabled(model.isBusy || model.report?.driveMounted != true)
+                .accessibilityLabel("Scan drive")
+                .help("Look for new or changed files on the backup drive")
+                Button { model.refresh() } label: {
+                    LabeledButtonFace(
+                        title: model.isRefreshing ? "Refreshing…" : "Refresh Amazon",
+                        symbol: "arrow.clockwise.icloud", running: model.isRefreshing)
+                }
+                .buttonStyle(PanelButtonStyle(kind: .secondaryFill, horizontalPadding: 8))
+                .disabled(model.isBusy)
+                .accessibilityLabel(model.isRefreshing ? "Refreshing Amazon catalog" : "Refresh Amazon")
+                .help("Read the latest list of photos and videos from Amazon Photos")
             }
-            Button { model.refresh() } label: {
-                Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .medium))
-            }
-            .buttonStyle(PanelButtonStyle(kind: .icon))
-            .disabled(model.isBusy)
-            .accessibilityLabel("Refresh")
-            .help("Refresh")
             moreMenu
         }
     }
