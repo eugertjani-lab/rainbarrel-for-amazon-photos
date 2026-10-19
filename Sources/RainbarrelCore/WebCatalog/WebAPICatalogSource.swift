@@ -25,6 +25,8 @@ public struct WebAPICatalogSource: AsyncCloudCatalogSource, Sendable {
     let limiter: RateLimiter
     let gate: ThrottleGate
     let clock: DownloadClock
+    /// Writes cookies that Amazon refreshes during the read back to the session store; nil without a store.
+    let persister: SessionPersister?
     /// Called after every answer of the change feed, from the task that reads.
     public var onProgress: (@Sendable (CatalogProgress) -> Void)?
 
@@ -33,33 +35,42 @@ public struct WebAPICatalogSource: AsyncCloudCatalogSource, Sendable {
 
     init(
         client: AmazonClient, limiter: RateLimiter, gate: ThrottleGate, clock: DownloadClock,
-        onProgress: (@Sendable (CatalogProgress) -> Void)? = nil
+        persister: SessionPersister? = nil, onProgress: (@Sendable (CatalogProgress) -> Void)? = nil
     ) {
         self.client = client
         self.limiter = limiter
         self.gate = gate
         self.clock = clock
+        self.persister = persister
         self.onProgress = onProgress
     }
 
     /// A source for the account of `session`, paced by the request limit in `config.throttle`. The
     /// session's credentials go only where `AmazonClient` sends them (the configured Amazon host).
+    /// With a `sessionStore`, refreshed cookies are written back while the read goes on (at most once
+    /// a minute) and when the source is invalidated, never over a sign-in made in the meantime.
     public static func make(
         session: StoredSession, config: Config, environment: DownloadEnvironment = .live,
-        onProgress: (@Sendable (CatalogProgress) -> Void)? = nil
+        sessionStore: (any SessionStore)? = nil, onProgress: (@Sendable (CatalogProgress) -> Void)? = nil
     ) throws -> WebAPICatalogSource {
         let client = try AmazonClient(
             session: session, host: config.effectiveAmazonHost, configuration: environment.sessionConfiguration(),
             timeouts: environment.timeouts)
+        let clock = environment.clock
         return WebAPICatalogSource(
             client: client,
-            limiter: RateLimiter(requestsPerMinute: config.throttle.normalized.maxRequestsPerMinute, clock: environment.clock),
-            gate: ThrottleGate(clock: environment.clock, random: environment.random),
-            clock: environment.clock, onProgress: onProgress)
+            limiter: RateLimiter(requestsPerMinute: config.throttle.normalized.maxRequestsPerMinute, clock: clock),
+            gate: ThrottleGate(clock: clock, random: environment.random),
+            clock: clock,
+            persister: sessionStore.map { SessionPersister(client: client, store: $0, baseline: session, now: { clock.now() }) },
+            onProgress: onProgress)
     }
 
-    /// Cancel what is running and release the connection pool.
-    public func invalidate() { client.invalidate() }
+    /// Write the refreshed cookies back, cancel what is running and release the connection pool.
+    public func invalidate() {
+        persister?.flush()
+        client.invalidate()
+    }
 
     var description: String { "Amazon Photos web API (\(client.host))" }
 
@@ -208,6 +219,7 @@ public struct WebAPICatalogSource: AsyncCloudCatalogSource, Sendable {
             do {
                 let value = try await work()
                 await gate.registerSuccess()
+                if let persister { _ = try? await blocking { persister.saveIfDue() } }
                 return value
             } catch let error as DownloadError {
                 let retryAfter: TimeInterval?

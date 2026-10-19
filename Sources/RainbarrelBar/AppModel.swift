@@ -103,6 +103,9 @@ final class AppModel {
     @ObservationIgnored private var carryBytes: Int64 = 0
     @ObservationIgnored private var sessionSavedAt: Date?
     @ObservationIgnored private var rejectedSessionSavedAt: Date?
+    /// True when the last download run of the app ended because Amazon refused the session: a new
+    /// sign-in then starts the download again.
+    @ObservationIgnored private var downloadStoppedForSession = false
     @ObservationIgnored private var signInController: SignInWindowController?
 
     init(tools: RainbarrelTools = RainbarrelTools()) {
@@ -452,6 +455,13 @@ final class AppModel {
         account = .signedIn
         accountNotice = nil
         downloadNotice = nil
+        // A download that stopped for the old sign-in goes on with the new one. Its end reloads the
+        // report, and a catalog refresh could not run next to it.
+        if downloadStoppedForSession {
+            downloadStoppedForSession = false
+            startDownload()
+        }
+        guard !isDownloadRunning else { return }
         let needsCatalog = report == nil || loadError != nil
         Task { await reload(refreshCatalog: needsCatalog ? true : nil) }
     }
@@ -474,6 +484,7 @@ final class AppModel {
                 accountHost = nil
                 sessionSavedAt = nil
                 accountNotice = nil
+                downloadStoppedForSession = false
             case .failure(let error):
                 accountNotice = "Could not sign out: \(error)"
             }
@@ -578,7 +589,8 @@ final class AppModel {
             guard session.isUsable() else { return .sessionExpired }
             let engine = DownloadEngine(paths: tools.paths, environment: tools.downloadEnvironment)
             let summary = try await engine.run(
-                config: config, session: session, options: DownloadOptions(), progress: progress)
+                config: config, session: session, options: DownloadOptions(), sessionStore: tools.sessionStore,
+                progress: progress)
             return .summary(summary)
         } catch is CancellationError {
             return .cancelled
@@ -603,6 +615,7 @@ final class AppModel {
         paused.message = nil
         engineTask = nil
         stopRequest = nil
+        downloadStoppedForSession = false
         let madeProgress = lastDisplay.filesDone > 0 || lastDisplay.bytesDone > 0
 
         func cancelled() {
@@ -617,6 +630,7 @@ final class AppModel {
         case .cancelled:
             cancelled()
         case .sessionExpired:
+            downloadStoppedForSession = true
             setAccount(.expired)
             if madeProgress { download = .paused(paused) } else { resetDownload() }
         case .signedOut:
@@ -632,6 +646,7 @@ final class AppModel {
             case .cancelled?:
                 cancelled()
             case .sessionExpired?:
+                downloadStoppedForSession = true
                 setAccount(.expired)
                 download = .paused(paused)
             case .driveUnavailable?:

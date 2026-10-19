@@ -21,7 +21,7 @@ final class StubServer: @unchecked Sendable {
 
     enum Reply: Sendable {
         case body(Data, status: Int = 200, headers: [String: String] = [:])
-        case redirect(to: String)
+        case redirect(to: String, headers: [String: String] = [:])
         case fail(URLError.Code)
         case failWith(NSError)
         case hang
@@ -145,9 +145,10 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
                     offset = end
                 }
                 me.client?.urlProtocolDidFinishLoading(me)
-            case .redirect(let target):
+            case .redirect(let target, let headers):
                 let response = HTTPURLResponse(
-                    url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": target])!
+                    url: url, statusCode: 302, httpVersion: "HTTP/1.1",
+                    headerFields: headers.merging(["Location": target]) { _, location in location })!
                 let next = URLRequest(url: URL(string: target)!)
                 #if canImport(FoundationNetworking)
                 me.followRedirectByHand(response: response, to: next)
@@ -347,6 +348,11 @@ final class DownloadFixture: @unchecked Sendable {
     private var contentOverride: (@Sendable (String, Int) -> StubServer.Reply?)?
     private var storageCalls: [String: Int] = [:]
     private var contentCalls: [String: Int] = [:]
+    private var acceptedSessionIDs: Set<String>
+    private var listingOverride: (@Sendable (Int) -> StubServer.Reply?)?
+    private var listingCalls = 0
+    private var apiHeaders: (@Sendable (Int) -> [String: String])?
+    private var apiCalls = 0
     var config: Config
     var timeouts = AmazonClient.Timeouts(request: 5, stall: 5)
     var freeSpace: @Sendable (String) -> Int64? = { _ in nil }
@@ -354,6 +360,7 @@ final class DownloadFixture: @unchecked Sendable {
 
     init(files list: [TestFile], folders: [CloudFolder] = testFolders, throttle: ThrottleConfig? = nil) throws {
         let id = fakeCounter.next()
+        acceptedSessionIDs = [sessionID]
         host = "t\(id).amazon.com"
         storageHost = "s\(id).amazonaws.com"
         home = try TempDirectory()
@@ -404,6 +411,41 @@ final class DownloadFixture: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Replace the answer of the file-count listing that the session check uses; called with how many
+    /// times it was asked before (from 0).
+    func overrideListing(_ body: (@Sendable (Int) -> StubServer.Reply?)?) {
+        lock.lock()
+        listingOverride = body
+        lock.unlock()
+    }
+
+    /// Headers (for example `Set-Cookie`) added to every answer of the API host; called with how many
+    /// API answers came before (from 0). File bytes from the storage host never get them.
+    func overrideAPIHeaders(_ body: (@Sendable (Int) -> [String: String])?) {
+        lock.lock()
+        apiHeaders = body
+        lock.unlock()
+    }
+
+    /// Accept this session id too (a new sign-in), besides the ones accepted so far.
+    func accept(sessionID id: String) {
+        lock.lock()
+        acceptedSessionIDs.insert(id)
+        lock.unlock()
+    }
+
+    /// Stop accepting this session id (the sign-in ended).
+    func reject(sessionID id: String) {
+        lock.lock()
+        acceptedSessionIDs.remove(id)
+        lock.unlock()
+    }
+
+    /// Requests for the file-count listing, in order.
+    var listingRequests: [StubServer.Request] {
+        server.requests(host: host).filter { $0.method == "GET" && $0.url.path == "/drive/v1/nodes" }
+    }
+
     var session: StoredSession {
         StoredSession(
             host: host,
@@ -417,21 +459,54 @@ final class DownloadFixture: @unchecked Sendable {
 
     private func handle(_ request: StubServer.Request) -> StubServer.Reply {
         let url = request.url
-        if url.host == storageHost {
-            let id = String(url.path.dropFirst("/files/".count))
-            lock.lock()
-            let count = storageCalls[id, default: 0]
-            storageCalls[id] = count + 1
-            let override = storageOverride
-            let data = files[id]
-            lock.unlock()
-            if let reply = override?(id, count) { return reply }
-            guard let data else { return .body(Data(), status: 404) }
-            return .body(data)
+        if url.host == storageHost { return handleStorage(request) }
+        lock.lock()
+        let index = apiCalls
+        apiCalls += 1
+        let headers = apiHeaders
+        lock.unlock()
+        let reply = handleAPI(request)
+        guard let extra = headers?(index), !extra.isEmpty else { return reply }
+        switch reply {
+        case .body(let data, let status, let fields):
+            return .body(data, status: status, headers: fields.merging(extra) { current, _ in current })
+        case .redirect(let target, let fields):
+            return .redirect(to: target, headers: fields.merging(extra) { current, _ in current })
+        default:
+            return reply
         }
-        guard request.header("x-amzn-sessionid") == sessionID else {
+    }
+
+    private func handleStorage(_ request: StubServer.Request) -> StubServer.Reply {
+        let id = String(request.url.path.dropFirst("/files/".count))
+        lock.lock()
+        let count = storageCalls[id, default: 0]
+        storageCalls[id] = count + 1
+        let override = storageOverride
+        let data = files[id]
+        lock.unlock()
+        if let reply = override?(id, count) { return reply }
+        guard let data else { return .body(Data(), status: 404) }
+        return .body(data)
+    }
+
+    private func handleAPI(_ request: StubServer.Request) -> StubServer.Reply {
+        let url = request.url
+        lock.lock()
+        let accepted = acceptedSessionIDs
+        lock.unlock()
+        guard let sent = request.header("x-amzn-sessionid"), accepted.contains(sent) else {
             return .body(Data(#"{"message":"No Auth Method Provided"}"#.utf8), status: 401,
                          headers: ["Content-Type": "application/json"])
+        }
+        if request.method == "GET", url.path == "/drive/v1/nodes" {
+            lock.lock()
+            let count = listingCalls
+            listingCalls += 1
+            let override = listingOverride
+            lock.unlock()
+            if let reply = override?(count) { return reply }
+            return .body(Data(#"{"count":3,"data":[]}"#.utf8), headers: ["Content-Type": "application/json"])
         }
         let parts = url.path.split(separator: "/").map(String.init)  // drive v1 nodes <id> [contentRedirection]
         guard parts.count >= 4 else { return .body(Data(), status: 404) }
@@ -469,8 +544,12 @@ final class DownloadFixture: @unchecked Sendable {
     func store() throws -> StateStore { try StateStore(path: paths.stateURL.path) }
 
     @discardableResult
-    func run(_ options: DownloadOptions = DownloadOptions(), session: StoredSession? = nil) async throws -> DownloadSummary {
-        try await engine.run(config: config, session: session ?? self.session, options: options)
+    func run(
+        _ options: DownloadOptions = DownloadOptions(), session: StoredSession? = nil,
+        sessionStore: (any SessionStore)? = nil
+    ) async throws -> DownloadSummary {
+        try await engine.run(
+            config: config, session: session ?? self.session, options: options, sessionStore: sessionStore)
     }
 
     /// Path of a file below the drive root.
