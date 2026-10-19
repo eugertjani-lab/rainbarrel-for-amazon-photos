@@ -678,4 +678,32 @@ struct PlanUndoTests {
         let folder = try #require(try fx.steps(plan).first)
         #expect(folder.state == .done && folder.result?.contains("a later step of the plan could not be undone") == true)
     }
+
+    @Test func aRefreshFromALaggingSourceDoesNotBringBackWhatAPlanTrashed() async throws {
+        let fx = try PlanFixture()
+        let plan = try fx.makePlan()
+        _ = try await fx.apply(plan.id)
+        let empty: Set<String> = ["E-1", "E-2", "E-3", "E-4"]
+        #expect(try fx.catalogItemIDs().isDisjoint(with: empty))
+
+        // The Amazon Photos app has not synced yet: its index still lists the trashed files.
+        func refresh(after days: Double) throws {
+            try CatalogRefresher(store: fx.store).refresh(
+                from: StaticCatalog(items: PlanFixture.items(), folders: PlanFixture.folders),
+                now: noonOct16.addingTimeInterval(days * 24 * 3600))
+        }
+        try refresh(after: 1)
+        #expect(try fx.catalogItemIDs() == ["G-1"])
+
+        // After the grace period the source is trusted again, for example after a restore on the website.
+        try refresh(after: 15)
+        #expect(try fx.catalogItemIDs() == Set(["G-1"]).union(empty))
+
+        // An undone trash no longer keeps anything out.
+        try refresh(after: 1)
+        #expect(try fx.catalogItemIDs() == ["G-1"])
+        _ = try await fx.undo(plan.id)
+        try refresh(after: 2)
+        #expect(try fx.catalogItemIDs() == Set(["G-1"]).union(empty))
+    }
 }

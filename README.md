@@ -318,6 +318,10 @@ A run stops at the first answer it cannot judge: an expired session, a refusal, 
 
 One apply performs at most 50 steps. When more are left, the plan shows as partly applied with a message that says how many remain, so you can check the result on the Amazon Photos website before the next apply continues. `rainbarrel config set-writes --max-steps N` changes the limit and 0 lifts it; the value is stored in `config.json` as `amazonWrites.maxStepsPerApply`. Skipped steps involve no write and do not count toward the limit.
 
+### Trashed files and a lagging catalog
+
+When the catalog comes from the Amazon Photos app's local index, a file that a plan moved to the trash can still be listed there until the app syncs, which may take days. A catalog refresh therefore leaves out every file that an applied plan trashed during the last 14 days, unless the step was undone. After those 14 days the index is trusted again, so a file that you restored yourself on the Amazon Photos website comes back into the catalog.
+
 ### Undoing a plan
 
 `rainbarrel undo <id>` runs the opposite of every step that was done, last step first. Trashed items are restored, moved items go back to their folder, names and descriptions are put back, and a folder that the plan created is moved to the trash. Every item is compared with the state recorded right after the plan changed it, so an item that was changed again in the meantime is left alone and reported with the reason. The plan then shows as partly applied until a later undo has dealt with it. Undo takes the same lock and asks for confirmation in the same way, and the local catalog is put back as well.
