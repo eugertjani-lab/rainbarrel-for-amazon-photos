@@ -60,7 +60,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
-codesign --force --sign - --timestamp=none "$APP"
+# Sign with a stable identity when one is available. macOS ties a Keychain "Always Allow" to the
+# app's code signature; an ad-hoc signature changes with every build, so each new build would ask
+# for the Keychain password again. RAINBARREL_SIGN_IDENTITY picks an identity (use "-" for ad hoc);
+# otherwise the first Developer ID Application or Apple Development identity is used, if any.
+IDENTITY="${RAINBARREL_SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+    IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n -E 's/^ *[0-9]+\) ([0-9A-F]{40}) "(Developer ID Application|Apple Development): .*"$/\1/p' | head -n 1)"
+fi
+if [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ]; then
+    codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
+    echo "Signed with identity $IDENTITY"
+else
+    codesign --force --sign - --timestamp=none "$APP"
+    echo "Signed ad hoc (no signing identity found); macOS asks for Keychain access again after each build"
+fi
 codesign --verify --strict "$APP"
 
 # Keep the build copy out of Spotlight and the Open With list, so only the copy in /Applications
