@@ -130,8 +130,13 @@ public struct DownloadPlanner {
     }
 
     /// Call `body` for every cloud item without a copy on the drive (inside the scan scope), newest
-    /// first. `body` returns false to stop.
-    func forEachCandidate(includeLiveVideos: Bool, year: Int?, _ body: (CloudItem) throws -> Bool) throws {
+    /// first. `body` returns false to stop. With `withoutBlockedFailures`, items whose job failed and
+    /// is not due for a retry at `now` (a cool-down is running, or the attempts are used up) are
+    /// left out: those are the items a download run would not touch.
+    func forEachCandidate(
+        includeLiveVideos: Bool, year: Int?, withoutBlockedFailures: (maxAttempts: Int, now: Int64)? = nil,
+        _ body: (CloudItem) throws -> Bool
+    ) throws {
         let scope = try DriveScope(scanSubpath: config.scanSubpath)
         let kinds = includeLiveVideos ? "c.kind IN ('file', 'live_video')" : "c.kind = 'file'"
         var args: [any SQLiteBindable] = []
@@ -141,12 +146,22 @@ public struct DownloadPlanner {
             yearClause = "AND c.taken_at >= ? AND c.taken_at < ?"
             args = [range.start, range.end]
         }
+        var failureClause = ""
+        if let blocked = withoutBlockedFailures {
+            failureClause = """
+                AND NOT EXISTS (SELECT 1 FROM download_jobs j
+                                WHERE j.node_id = c.node_id AND j.status = 'failed'
+                                  AND NOT \(DownloadJobTable.failedIsDue(alias: "j")))
+                """
+            args += DownloadJobTable.failedIsDueArguments(maxAttempts: blocked.maxAttempts, now: blocked.now)
+        }
         let statement = try store.database.prepare("""
             SELECT c.node_id, c.kind, c.name, c.md5, c.size, c.taken_at, c.ext, c.parent_id
             FROM cloud_items c
             WHERE \(kinds) \(yearClause)
               AND NOT EXISTS (SELECT 1 FROM drive_files d
                               WHERE d.md5 = c.md5 AND d.size > 0 AND \(scope.sqlCondition(column: "d.rel_path")))
+              \(failureClause)
             ORDER BY c.taken_at DESC, c.node_id
             """)
         try statement.bind(args)
@@ -161,14 +176,20 @@ public struct DownloadPlanner {
     }
 
     /// The plan for a dry run: what the next `limit` downloads would write, without touching
-    /// the network, the queue or the drive. Items with the same content count once.
-    public func plan(options: DownloadOptions, root: String?) throws -> [PlannedDownload] {
+    /// the network, the queue or the drive. Items with the same content count once. Items whose job
+    /// failed and waits for a retry, or ran out of attempts, are not in it, because a run would not
+    /// download them (unless `options.retryFailed` puts them back first). The same plan gives the
+    /// count on the menu-bar app's Download button.
+    public func plan(options: DownloadOptions, root: String?, now: Date = Date()) throws -> [PlannedDownload] {
         let builder = try TargetBuilder(store: store, scanSubpath: config.scanSubpath)
         var seenMD5 = Set<String>()
         var reserved = Set<String>()
         var planned: [PlannedDownload] = []
         let limit = options.limit ?? Int.max
-        try forEachCandidate(includeLiveVideos: options.includeLiveVideos, year: options.year) { item in
+        let blocked = options.retryFailed ? nil : (maxAttempts: options.maxAttempts, now: Int64(now.timeIntervalSince1970))
+        try forEachCandidate(
+            includeLiveVideos: options.includeLiveVideos, year: options.year, withoutBlockedFailures: blocked
+        ) { item in
             // Empty files all share one MD5 but each one is created at its own path.
             guard item.size == 0 || seenMD5.insert(item.md5).inserted else { return true }
             let (relPath, resolved) = builder.target(for: item)
@@ -267,7 +288,8 @@ struct DownloadJobTable {
                     status = CASE WHEN status IN ('done', 'skipped') THEN 'pending' ELSE status END,
                     attempts = CASE WHEN status IN ('done', 'skipped') THEN 0 ELSE attempts END,
                     last_error = CASE WHEN status IN ('done', 'skipped') THEN NULL ELSE last_error END,
-                    updated_at = CASE WHEN status IN ('done', 'skipped') THEN excluded.updated_at ELSE updated_at END
+                    updated_at = CASE WHEN status IN ('done', 'skipped') THEN excluded.updated_at ELSE updated_at END,
+                    retry_after = CASE WHEN status IN ('done', 'skipped') THEN NULL ELSE retry_after END
                 """)
             try planner.forEachCandidate(includeLiveVideos: includeLiveVideos, year: nil) { item in
                 let (relPath, _) = builder.target(for: item)
@@ -279,7 +301,7 @@ struct DownloadJobTable {
             try database.run("""
                 UPDATE download_jobs
                 SET status = 'skipped', last_error = 'already on the drive, or no longer in the cloud catalog',
-                    updated_at = ?
+                    retry_after = NULL, updated_at = ?
                 WHERE status IN ('pending', 'failed', 'downloading')
                   AND node_id NOT IN (SELECT node_id FROM temp.download_candidates)
                 """, [stamp])
@@ -302,10 +324,24 @@ struct DownloadJobTable {
             attempts: row.int(7), lastError: row.string(8), updatedAt: row.int64(9))
     }
 
-    /// Eligible rows: pending, plus failed rows that were not tried in this run and have attempts left.
-    private func eligibleClause(options: DownloadOptions, runStartedAt: Int64) -> (sql: String, args: [any SQLiteBindable]) {
-        var sql = "(status = 'pending' OR (status = 'failed' AND attempts < ? AND updated_at < ?))"
-        var args: [any SQLiteBindable] = [options.maxAttempts, runStartedAt]
+    /// A failed job is due when attempts are left and its time has come: `retry_after` has passed, or,
+    /// for jobs without a cool-down, the job was not tried in this run. Arguments: see `failedIsDueArguments`.
+    static func failedIsDue(alias: String? = nil) -> String {
+        let p = alias.map { $0 + "." } ?? ""
+        return """
+            (\(p)attempts < ? AND \
+            (\(p)retry_after IS NOT NULL AND \(p)retry_after <= ? OR \(p)retry_after IS NULL AND \(p)updated_at < ?))
+            """
+    }
+
+    static func failedIsDueArguments(maxAttempts: Int, now: Int64) -> [any SQLiteBindable] {
+        [maxAttempts, now, now]
+    }
+
+    /// The conditions of a run for which jobs it takes: the kind and the year, as an `AND` tail.
+    private func runFilter(options: DownloadOptions) -> (sql: String, args: [any SQLiteBindable]) {
+        var sql = ""
+        var args: [any SQLiteBindable] = []
         if !options.includeLiveVideos { sql += " AND kind = 'file'" }
         if let year = options.year {
             let range = DownloadPlanner.range(ofYear: year)
@@ -315,47 +351,61 @@ struct DownloadJobTable {
         return (sql, args)
     }
 
-    /// Number and total size of what the run would handle (at most `limit` jobs, before dedupe).
+    /// Number and total size of what the run would handle (at most `limit` jobs, before dedupe):
+    /// pending jobs, plus failed ones that are due.
     func totals(options: DownloadOptions, runStartedAt: Int64) throws -> (count: Int, bytes: Int64) {
-        let clause = eligibleClause(options: options, runStartedAt: runStartedAt)
+        let filter = runFilter(options: options)
         let limit = options.limit ?? Int(Int32.max)
+        let failedArgs = Self.failedIsDueArguments(maxAttempts: options.maxAttempts, now: runStartedAt)
         let rows = try queue.database.rows("""
             SELECT COUNT(*), COALESCE(SUM(size), 0) FROM (
-                SELECT size FROM download_jobs WHERE \(clause.sql) ORDER BY taken_at DESC LIMIT ?)
-            """, clause.args + [limit]) { ($0.int(0), $0.int64(1)) }
+                SELECT size FROM download_jobs
+                WHERE (status = 'pending' OR (status = 'failed' AND \(Self.failedIsDue()))) \(filter.sql)
+                ORDER BY taken_at DESC LIMIT ?)
+            """, failedArgs + filter.args + [limit]) { ($0.int(0), $0.int64(1)) }
         return rows.first ?? (0, 0)
     }
 
-    /// The next eligible job in taken-at order, newest first (pending and retried failures together).
+    /// The next eligible job in taken-at order, newest first (pending and due failures together).
     func nextEligible(options: DownloadOptions, runStartedAt: Int64) throws -> DownloadJob? {
-        let clause = eligibleClause(options: options, runStartedAt: runStartedAt)
-        func part(_ status: String) -> String {
-            // Each half uses the (status, taken_at) index, so the scan stops at the first match.
-            let filter = clause.sql.replacingOccurrences(
-                of: "(status = 'pending' OR (status = 'failed' AND attempts < ? AND updated_at < ?))",
-                with: status == "pending" ? "status = 'pending'" : "(status = 'failed' AND attempts < ? AND updated_at < ?)")
-            return "SELECT * FROM (SELECT \(Self.jobColumns) FROM download_jobs WHERE \(filter) ORDER BY taken_at DESC, node_id LIMIT 1)"
+        let filter = runFilter(options: options)
+        // Each half uses the (status, taken_at) index, so the scan stops at the first match.
+        func part(_ condition: String) -> String {
+            "SELECT * FROM (SELECT \(Self.jobColumns) FROM download_jobs WHERE \(condition) \(filter.sql) ORDER BY taken_at DESC, node_id LIMIT 1)"
         }
-        // Bind order: pending half has only the year range; failed half has attempts, time, year range.
-        let yearArgs = Array(clause.args.dropFirst(2))
-        let args: [any SQLiteBindable] = yearArgs + clause.args
+        let failedArgs = Self.failedIsDueArguments(maxAttempts: options.maxAttempts, now: runStartedAt)
         let rows = try queue.database.rows("""
-            \(part("pending")) UNION ALL \(part("failed")) ORDER BY taken_at DESC, node_id LIMIT 1
-            """, args) { Self.job(from: $0) }
+            \(part("status = 'pending'")) UNION ALL \(part("(status = 'failed' AND \(Self.failedIsDue()))"))
+            ORDER BY taken_at DESC, node_id LIMIT 1
+            """, filter.args + failedArgs + filter.args) { Self.job(from: $0) }
         return rows.first
     }
 
+    /// Update a job. A job that is not `failed` has no cool-down; a failed one gets `retryAfter` (nil for none).
     func setStatus(
         nodeId: String, status: DownloadJobStatus, attempts: Int? = nil, lastError: String?? = nil,
-        targetRelPath: String? = nil, now: Date
+        targetRelPath: String? = nil, retryAfter: Date? = nil, now: Date
     ) throws {
-        var sets = ["status = ?", "updated_at = ?"]
-        var args: [any SQLiteBindable] = [status.rawValue, Int64(now.timeIntervalSince1970)]
+        var sets = ["status = ?", "updated_at = ?", "retry_after = ?"]
+        var args: [any SQLiteBindable] = [
+            status.rawValue, Int64(now.timeIntervalSince1970),
+            status == .failed ? retryAfter.map { Int64($0.timeIntervalSince1970) } : nil,
+        ]
         if let attempts { sets.append("attempts = ?"); args.append(attempts) }
         if let lastError { sets.append("last_error = ?"); args.append(lastError) }
         if let targetRelPath { sets.append("target_rel_path = ?"); args.append(targetRelPath) }
         args.append(nodeId)
         try queue.database.run("UPDATE download_jobs SET \(sets.joined(separator: ", ")) WHERE node_id = ?", args)
+    }
+
+    /// Put every failed job back to pending with no attempts and no cool-down. Returns how many.
+    @discardableResult
+    func resetFailed(now: Date) throws -> Int {
+        try queue.database.run("""
+            UPDATE download_jobs SET status = 'pending', attempts = 0, retry_after = NULL, updated_at = ?
+            WHERE status = 'failed'
+            """, [Int64(now.timeIntervalSince1970)])
+        return queue.database.changes
     }
 
     func isOnDrive(md5: String) throws -> Bool {
@@ -411,12 +461,38 @@ struct DownloadJobTable {
 
     func failures(limit: Int) throws -> [DownloadFailure] {
         try queue.database.rows("""
-            SELECT node_id, target_rel_path, attempts, last_error, updated_at FROM download_jobs
+            SELECT node_id, target_rel_path, attempts, last_error, updated_at, retry_after FROM download_jobs
             WHERE status = 'failed' ORDER BY updated_at DESC, node_id LIMIT ?
             """, [limit]) {
             DownloadFailure(
                 nodeId: $0.string(0) ?? "", targetRelPath: $0.string(1) ?? "", attempts: $0.int(2),
-                reason: $0.string(3) ?? "unknown", updatedAt: Date(timeIntervalSince1970: TimeInterval($0.int64(4))))
+                reason: $0.string(3) ?? "unknown", updatedAt: Date(timeIntervalSince1970: TimeInterval($0.int64(4))),
+                retryAfter: $0.isNull(5) ? nil : Date(timeIntervalSince1970: TimeInterval($0.int64(5))))
         }
+    }
+
+    /// The failed jobs grouped by reason: how many wait for a retry, how many a run takes next, how
+    /// many are out of attempts. Largest group first.
+    func failureSummary(maxAttempts: Int, now: Date) throws -> DownloadFailureSummary {
+        let stamp = Int64(now.timeIntervalSince1970)
+        let groups = try queue.database.rows("""
+            SELECT COALESCE(last_error, 'unknown'),
+                   SUM(CASE WHEN attempts >= ?1 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN attempts < ?1 AND retry_after > ?2 THEN 1 ELSE 0 END),
+                   MIN(CASE WHEN attempts < ?1 AND retry_after > ?2 THEN retry_after END),
+                   COUNT(*)
+            FROM download_jobs WHERE status = 'failed'
+            GROUP BY COALESCE(last_error, 'unknown')
+            """, [maxAttempts, stamp]) { row -> DownloadFailureGroup in
+            let permanent = row.int(1)
+            let waiting = row.int(2)
+            return DownloadFailureGroup(
+                reason: row.string(0) ?? "unknown", waiting: waiting, due: row.int(4) - permanent - waiting,
+                permanent: permanent,
+                nextRetryAt: row.isNull(3) ? nil : Date(timeIntervalSince1970: TimeInterval(row.int64(3))))
+        }
+        return DownloadFailureSummary(groups: groups.sorted {
+            ($0.total, $1.reason) > ($1.total, $0.reason)
+        })
     }
 }

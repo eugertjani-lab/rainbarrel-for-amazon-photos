@@ -54,7 +54,8 @@ public enum MetaKey {
 
 /// The tool's own database (`state.sqlite`): the cloud catalog, the drive index, metadata and scan history.
 public final class StateStore {
-    public static let schemaVersion = 1
+    /// 2 added `download_jobs.retry_after`.
+    public static let schemaVersion = 2
 
     public let database: SQLiteDatabase
 
@@ -68,8 +69,9 @@ public final class StateStore {
             hashed_at = excluded.hashed_at, last_error = excluded.last_error
         """)
 
-    /// Open (and create when missing) the state database at `path`. Use ":memory:" for tests.
-    public init(path: String) throws {
+    /// Open (and create when missing) the state database at `path`. Use ":memory:" for tests. `now`
+    /// is the time a schema migration stamps on the rows it changes.
+    public init(path: String, now: Date = Date()) throws {
         database = try SQLiteDatabase(path: path, mode: .readWriteCreate)
         // The CLI, the MCP server and the menu-bar app may use the same file at the same time:
         // WAL lets readers and one writer overlap, and writers wait up to 5 s for each other.
@@ -77,6 +79,7 @@ public final class StateStore {
         try database.execute("PRAGMA journal_mode = WAL")
         try database.execute("PRAGMA synchronous = NORMAL")
         try createSchema()
+        try migrate(now: now)
     }
 
     private func createSchema() throws {
@@ -108,7 +111,8 @@ public final class StateStore {
                 status          TEXT NOT NULL,
                 attempts        INTEGER NOT NULL DEFAULT 0,
                 last_error      TEXT,
-                updated_at      INTEGER NOT NULL
+                updated_at      INTEGER NOT NULL,
+                retry_after     INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_download_jobs_queue ON download_jobs(status, taken_at);
             CREATE INDEX IF NOT EXISTS idx_download_jobs_md5 ON download_jobs(md5);
@@ -191,6 +195,34 @@ public final class StateStore {
             try setMeta(MetaKey.schemaVersion, String(Self.schemaVersion))
         }
     }
+
+    /// Bring a database made by an earlier version up to date. A database that is current is only
+    /// read. Otherwise the check is repeated inside a write transaction, so a step runs once even when
+    /// two processes open the old file together.
+    private func migrate(now: Date) throws {
+        guard try !hasColumn("retry_after", in: "download_jobs") else { return }
+        try database.transaction {
+            guard try !hasColumn("retry_after", in: "download_jobs") else { return }
+            // Version 2: `retry_after`. Jobs that the old rule made permanent after an HTTP 404 (it used
+            // up all attempts at once) go back to failed with one attempt and are due now, so the next
+            // run treats them as temporary failures, as the new rule does.
+            try database.execute("ALTER TABLE download_jobs ADD COLUMN retry_after INTEGER")
+            try database.run(
+                """
+                UPDATE download_jobs SET attempts = 1, retry_after = ?
+                WHERE status = 'failed' AND last_error = ? AND attempts >= ?
+                """,
+                [Int64(now.timeIntervalSince1970), Self.legacyNotFoundReason, DownloadOptions.defaultMaxAttempts])
+            try setMeta(MetaKey.schemaVersion, String(Self.schemaVersion))
+        }
+    }
+
+    private func hasColumn(_ column: String, in table: String) throws -> Bool {
+        try database.rows("PRAGMA table_info(\(table))", map: { $0.string(1) ?? "" }).contains(column)
+    }
+
+    /// What the stored reason of a file said before HTTP 404 became `DownloadError.notAvailableYet`.
+    static let legacyNotFoundReason = "Amazon answered HTTP 404"
 
     // MARK: meta
 

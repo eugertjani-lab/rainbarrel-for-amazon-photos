@@ -402,12 +402,15 @@ public struct DownloadEngine: Sendable {
 
     // MARK: Dry run
 
-    /// What the next downloads would write. No network, no queue changes, no writes.
+    /// What the next downloads would write: the files a run would take now. Files that failed and wait
+    /// for a retry, or are out of attempts, are left out. No network, no queue changes, no writes.
     public func plan(config: Config, options: DownloadOptions) throws -> [PlannedDownload] {
         let root = try? Self.targetRoot(config: config, options: options)
         let store = try StateStore(path: paths.stateURL.path)
         return try DownloadPlanner(store: store, config: config)
-            .plan(options: options, root: root.flatMap { FileOps.isDirectory($0) ? $0 : nil })
+            .plan(
+                options: options, root: root.flatMap { FileOps.isDirectory($0) ? $0 : nil },
+                now: environment.clock.now())
     }
 
     // MARK: Run
@@ -825,6 +828,10 @@ final class RunContext: @unchecked Sendable {
                     }
                     await ledger.recordAttempt(
                         job, attempts: job.attempts, error: redactor.redact(error.description), now: clock.now())
+                case .notAvailableYet:
+                    unlink(part)
+                    await failNotAvailableYet(job, error: error)
+                    return
                 case .httpStatus, .redirectRefused, .invalidResponse, .invalidNodeId, .insecureURL, .invalidHost:
                     await fail(job, error: error, verification: false, permanent: true)
                     return
@@ -893,6 +900,15 @@ final class RunContext: @unchecked Sendable {
                 "Amazon keeps limiting requests. Pausing for 15 minutes.", until: decision.until)
         }
         return !(await coordinator.shouldStop)
+    }
+
+    /// Record an HTTP 404 for the file: not final, the job waits for a cool-down (see `DownloadRetryPolicy`).
+    private func failNotAvailableYet(_ job: DownloadJob, error: Error) async {
+        let now = clock.now()
+        let text = redactor.redact((error as? DownloadError)?.description ?? "\(error)")
+        let decision = DownloadRetryPolicy.afterNotAvailable(attempts: job.attempts, takenAt: job.takenAt, now: now)
+        await ledger.markFailed(job, attempts: decision.attempts, error: text, retryAfter: decision.retryAfter, now: now)
+        await coordinator.countFailed(job, error: text, verification: false)
     }
 
     /// Record a final failure. `permanent` uses up the remaining attempts.

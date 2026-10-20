@@ -75,6 +75,8 @@ final class AppModel {
     /// The host the stored session belongs to.
     private(set) var accountHost: String?
     private(set) var queue: QueuePreview?
+    /// The failed download jobs by reason, read together with `queue`.
+    private(set) var failures: DownloadFailureSummary?
     /// Whether the backup drive accepts writes; nil when it is not mounted.
     private(set) var driveWritable: Bool?
     private(set) var download: DownloadState = .idle
@@ -117,7 +119,7 @@ final class AppModel {
     static func preview(
         tools: RainbarrelTools = RainbarrelTools(), report: SyncReport, config: Config,
         account: AccountState = .signedIn, download: DownloadState = .idle, queue: QueuePreview? = nil,
-        driveWritable: Bool? = true, downloadNotice: String? = nil
+        failures: DownloadFailureSummary? = nil, driveWritable: Bool? = true, downloadNotice: String? = nil
     ) -> AppModel {
         let model = AppModel(tools: tools)
         model.report = report
@@ -127,6 +129,7 @@ final class AppModel {
         model.download = download
         model.driveWritable = driveWritable
         model.downloadNotice = downloadNotice
+        model.failures = failures
         model.queue = queue ?? QueuePreview(
             count: report.onlineOnly.count + report.liveVideosOnlineOnly.count, bytes: report.onlineOnlyDistinctBytes)
         return model
@@ -181,10 +184,13 @@ final class AppModel {
         if driveWritable == false { return .driveReadOnly }
         var note: String?
         if case .finished(let line) = download { note = line }
-        guard let queue else { return note.map { .nothingToDownload(note: $0) } ?? .none }
+        guard let queue else { return note.map { .nothingToDownload(note: $0, failures: nil) } ?? .none }
+        // The count is what a run would download now. Files that wait for Amazon or failed for good
+        // are not in it; they get their own line.
+        let blocked = failures.flatMap { $0.blocked > 0 ? $0 : nil }
         return queue.count > 0
-            ? .ready(count: queue.count, bytes: queue.bytes, note: note)
-            : .nothingToDownload(note: note)
+            ? .ready(count: queue.count, bytes: queue.bytes, note: note, failures: blocked)
+            : .nothingToDownload(note: note, failures: blocked)
     }
 
     /// The throttle's active hours as "01:00–07:00", or nil when downloads may run at any time.
@@ -261,6 +267,7 @@ final class AppModel {
         var report: SyncReport
         var config: Config
         var queue: QueuePreview?
+        var failures: DownloadFailureSummary?
         var driveWritable: Bool?
     }
 
@@ -291,6 +298,7 @@ final class AppModel {
             applySession(session, config: loaded.config)
             driveWritable = loaded.driveWritable
             if let queue = loaded.queue { self.queue = queue }
+            if let failures = loaded.failures { self.failures = failures }
         case .failure(let error):
             applySession(session, config: config)
             let problem = Self.catalogProblem(error.message)
@@ -324,16 +332,22 @@ final class AppModel {
             let report = try await tools.syncStatus(refresh: refreshCatalog == true ? false : refreshCatalog)
             var writable: Bool?
             var queue: QueuePreview?
+            var failures: DownloadFailureSummary?
             if report.driveMounted {
                 writable = DownloadEngine.driveLooksWritable(config: config)
                 if includeQueue, writable != false {
+                    // The planner leaves out files that failed and wait for a retry or ran out of
+                    // attempts, so the count is what a run would really download.
                     let engine = DownloadEngine(paths: tools.paths, environment: tools.downloadEnvironment)
                     if let plan = try? engine.plan(config: config, options: DownloadOptions()) {
                         queue = QueuePreview(count: plan.count, bytes: plan.reduce(into: Int64(0)) { $0 += $1.size })
                     }
+                    failures = try? tools.downloadFailureSummary()
                 }
             }
-            return (.success(Loaded(report: report, config: config, queue: queue, driveWritable: writable)), session)
+            return (
+                .success(Loaded(report: report, config: config, queue: queue, failures: failures, driveWritable: writable)),
+                session)
         } catch let error as ToolError {
             return (.failure(error), session)
         } catch {
@@ -493,7 +507,13 @@ final class AppModel {
 
     // MARK: Downloading
 
-    func startDownload() {
+    /// The panel's Retry now: the same as `rainbarrel download --retry-failed`. Every failed file goes
+    /// back in the queue with fresh attempts, and the download starts.
+    func retryFailedDownloads() {
+        startDownload(retryFailed: true)
+    }
+
+    func startDownload(retryFailed: Bool = false) {
         guard account == .signedIn, !isBusy else { return }
         if case .paused(let paused) = download {
             carryFiles = paused.filesDone
@@ -506,7 +526,8 @@ final class AppModel {
         stopRequest = nil
         var starting = DownloadDisplay()
         starting.filesDone = carryFiles
-        starting.filesTotal = carryFiles + (queue?.count ?? 0)
+        // The engine reports the real totals with its first progress.
+        starting.filesTotal = carryFiles + (queue?.count ?? 0) + (retryFailed ? failures?.blocked ?? 0 : 0)
         starting.bytesDone = carryBytes
         starting.bytesTotal = carryBytes + (queue?.bytes ?? 0)
         lastDisplay = starting
@@ -516,7 +537,7 @@ final class AppModel {
         let files = carryFiles
         let bytes = carryBytes
         engineTask = Task { [weak self] in
-            let result = await Self.runDownload(tools: tools) { progress in
+            let result = await Self.runDownload(tools: tools, retryFailed: retryFailed) { progress in
                 guard throttle.shouldForward() else { return }
                 Task { @MainActor in self?.apply(progress, carryFiles: files, carryBytes: bytes) }
             }
@@ -580,7 +601,7 @@ final class AppModel {
     }
 
     nonisolated private static func runDownload(
-        tools: RainbarrelTools, progress: @escaping @Sendable (DownloadProgress) -> Void
+        tools: RainbarrelTools, retryFailed: Bool, progress: @escaping @Sendable (DownloadProgress) -> Void
     ) async -> DownloadRunResult {
         do {
             let config = try tools.loadConfig()
@@ -589,8 +610,8 @@ final class AppModel {
             guard session.isUsable() else { return .sessionExpired }
             let engine = DownloadEngine(paths: tools.paths, environment: tools.downloadEnvironment)
             let summary = try await engine.run(
-                config: config, session: session, options: DownloadOptions(), sessionStore: tools.sessionStore,
-                progress: progress)
+                config: config, session: session, options: DownloadOptions(retryFailed: retryFailed),
+                sessionStore: tools.sessionStore, progress: progress)
             return .summary(summary)
         } catch is CancellationError {
             return .cancelled

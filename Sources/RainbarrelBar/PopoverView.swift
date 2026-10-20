@@ -637,7 +637,7 @@ private struct PrimaryActionArea: View {
                         }
                     }
                     .accessibilityElement(children: .combine)
-                case .ready(let count, let bytes, let note):
+                case .ready(let count, let bytes, let note, let failures):
                     if let note { RunNote(text: note) }
                     Button { model.startDownload() } label: {
                         Text("Download \(DisplayFormat.number(count)) missing · \(DisplayFormat.bytesShort(bytes))")
@@ -647,15 +647,20 @@ private struct PrimaryActionArea: View {
                     }
                     .buttonStyle(PanelButtonStyle(kind: .primary, accent: palette.buttonFill))
                     .disabled(model.isBusy)
-                case .nothingToDownload(let note):
+                    if let failures { FailedFilesRow(summary: failures, model: model) }
+                case .nothingToDownload(let note, let failures):
                     if let note { RunNote(text: note) }
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(palette.onDrive)
-                            .accessibilityHidden(true)
-                        Text("Nothing to download").font(.system(size: 13))
+                    if let failures {
+                        FailedFilesRow(summary: failures, model: model)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(palette.onDrive)
+                                .accessibilityHidden(true)
+                            Text("Nothing to download").font(.system(size: 13))
+                        }
+                        .frame(minHeight: 24)
+                        .accessibilityElement(children: .combine)
                     }
-                    .frame(minHeight: 24)
-                    .accessibilityElement(children: .combine)
                 case .downloading(let display, let stopping):
                     ProgressCard(
                         display: display, activeHours: model.activeHoursText, mode: .downloading(stopping: stopping),
@@ -665,6 +670,41 @@ private struct PrimaryActionArea: View {
                 }
                 ForEach(notices, id: \.self) { ProblemView(message: $0) }
             }
+        }
+    }
+}
+
+/// Failed files that the Download button leaves out: those that wait for Amazon (with the time of
+/// the next try) and those that failed for good, with a small Retry now button. Static text; nothing
+/// in it animates.
+private struct FailedFilesRow: View {
+    let summary: DownloadFailureSummary
+    let model: AppModel
+
+    var body: some View {
+        let lines = summary.noticeLines(now: Date())
+        HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: summary.permanent > 0 ? "exclamationmark.triangle.fill" : "clock")
+                    .foregroundStyle(summary.permanent > 0 ? Color.orange : Color.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(lines, id: \.self) { line in
+                        Text(line)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 4)
+            Button { model.retryFailedDownloads() } label: {
+                Text("Retry now").font(.system(size: 12, weight: .medium)).lineLimit(1)
+            }
+            .buttonStyle(PanelButtonStyle(kind: .compact))
+            .disabled(model.isBusy)
+            .help("Try every failed file again now")
         }
     }
 }

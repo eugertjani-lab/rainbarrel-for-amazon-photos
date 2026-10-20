@@ -86,6 +86,10 @@ struct Download: AsyncParsableCommand {
     @Option(help: "Speed limit for this run in megabytes per second, all files together.")
     var mbps: Double?
 
+    @Flag(name: .customLong("retry-failed"),
+          help: "First put every failed file back in the queue with fresh attempts, so that this run tries all of them again.")
+    var retryFailed = false
+
     @Flag(name: .customLong("ignore-hours"), help: "Download even outside the configured active hours.")
     var ignoreHours = false
 
@@ -110,13 +114,14 @@ struct Download: AsyncParsableCommand {
         let options = DownloadOptions(
             year: year, limit: limit, includeLiveVideos: !noLiveVideos,
             targetRoot: to.map { absolutePath($0) }, concurrency: concurrency, maxMBps: mbps,
-            hoursPolicy: ignoreHours ? .ignore : (respectHours ? .exit : .wait))
+            hoursPolicy: ignoreHours ? .ignore : (respectHours ? .exit : .wait), retryFailed: retryFailed)
         let engine = DownloadEngine(paths: context.paths)
+        let tools = RainbarrelTools(paths: context.paths)
 
         if dryRun {
             try await ensureCatalog(context)
             let planned = try engine.plan(config: config, options: options)
-            printPlan(planned, driveRoot: driveRoot, root: options.targetRoot)
+            printPlan(planned, driveRoot: driveRoot, root: options.targetRoot, failures: try? tools.downloadFailureSummary())
             return
         }
 
@@ -151,7 +156,7 @@ struct Download: AsyncParsableCommand {
             throw CLIError(error.description)
         }
         printer.finish()
-        try report(summary)
+        try report(summary, failures: try? tools.downloadFailureSummary())
     }
 
     private func ensureCatalog(_ context: AppContext) async throws {
@@ -162,9 +167,29 @@ struct Download: AsyncParsableCommand {
         }
     }
 
-    private func printPlan(_ planned: [PlannedDownload], driveRoot: String, root: String?) {
+    /// The sentence about failed files that a run leaves alone, with the way to try them now.
+    static func failureNote(_ failures: DownloadFailureSummary?) -> String? {
+        guard let failures, failures.waiting + failures.permanent > 0 else { return nil }
+        var parts: [String] = []
+        if failures.waiting > 0 {
+            var text = "\(Format.number(failures.waiting)) not available from Amazon yet"
+            if let next = failures.nextRetryAt { text += " (next try \(Format.dateTime(next)))" }
+            parts.append(text)
+        }
+        if failures.permanent > 0 { parts.append("\(Format.number(failures.permanent)) failed for good") }
+        return parts.joined(separator: ", ")
+            + ". See `rainbarrel download-status`, or use `rainbarrel download --retry-failed` to try them now."
+    }
+
+    private func printPlan(
+        _ planned: [PlannedDownload], driveRoot: String, root: String?, failures: DownloadFailureSummary?
+    ) {
         if planned.isEmpty {
-            print("Nothing to download: every cloud file is on the drive.")
+            if let note = Self.failureNote(failures) {
+                print("Nothing to download now: \(note)")
+            } else {
+                print("Nothing to download: every cloud file is on the drive.")
+            }
             return
         }
         print("Target root: \((root ?? driveRoot).sanitizedForTerminal)")
@@ -179,11 +204,15 @@ struct Download: AsyncParsableCommand {
         print("\(Format.number(planned.count)) files, \(Format.bytes(bytes)) would be downloaded. Nothing was written (dry run).")
     }
 
-    private func report(_ summary: DownloadSummary) throws {
+    private func report(_ summary: DownloadSummary, failures: DownloadFailureSummary?) throws {
         let handled = summary.filesDownloaded + summary.filesAdopted + summary.filesSkipped + summary.filesFailed
         if handled == 0 {
             guard let reason = summary.stopReason else {
-                print("Nothing to download: no missing file matches. See `rainbarrel download-status` for the queue.")
+                if let note = Self.failureNote(failures) {
+                    print("Nothing to download now: \(note)")
+                } else {
+                    print("Nothing to download: no missing file matches. See `rainbarrel download-status` for the queue.")
+                }
                 return
             }
             print(reason.description.sanitizedForTerminal)
@@ -202,6 +231,9 @@ struct Download: AsyncParsableCommand {
                 print("    \(result.path.sanitizedForTerminal): \((result.detail ?? "unknown").sanitizedForTerminal)")
             }
             if failed.count > 10 { print("    ... and \(failed.count - 10) more; see `rainbarrel download-status`") }
+            if failed.contains(where: { $0.detail == DownloadError.notAvailableYetMessage }) {
+                print("  Files that Amazon does not have yet are tried again after a cool-down; see `rainbarrel download-status`.")
+            }
         }
         if let reason = summary.stopReason {
             print(reason.description.sanitizedForTerminal)
@@ -258,6 +290,15 @@ struct DownloadStatus: ParsableCommand {
     @Flag(help: "Print the report as JSON.")
     var json = false
 
+    /// "5  (3 waiting for a retry, 2 failed for good)"
+    private func failedText(_ failed: Int, summary: DownloadFailureSummary) -> String {
+        var parts: [String] = []
+        if summary.waiting > 0 { parts.append("\(Format.number(summary.waiting)) waiting for a retry") }
+        if summary.due > 0 { parts.append("\(Format.number(summary.due)) tried again by the next run") }
+        if summary.permanent > 0 { parts.append("\(Format.number(summary.permanent)) failed for good") }
+        return parts.isEmpty ? Format.number(failed) : "\(Format.number(failed))  (\(parts.joined(separator: ", ")))"
+    }
+
     func run() throws {
         let tools = RainbarrelTools(paths: .forCLI())
         let report = try tools.downloadStatus(failureLimit: json ? 200 : 20)
@@ -273,13 +314,30 @@ struct DownloadStatus: ParsableCommand {
         row("Waiting:", "\(Format.number(queue.pending))  (\(Format.bytes(queue.pendingBytes)))")
         row("Downloading:", Format.number(queue.downloading))
         row("Done:", Format.number(queue.done))
-        row("Failed:", Format.number(queue.failed))
+        row("Failed:", failedText(queue.failed, summary: report.failureSummary))
         row("Skipped:", Format.number(queue.skipped))
         row("Not queued yet:", "\(Format.number(queue.notQueued))  (the queue is filled when a download starts)")
+        if !report.failureSummary.isEmpty {
+            print("\nFailures by reason")
+            for group in report.failureSummary.groups {
+                print("  \(group.reason.sanitizedForTerminal)")
+                if group.waiting > 0 {
+                    let next = group.nextRetryAt.map { "  (next try \(Format.dateTime($0)), \(Format.timeUntil($0)))" } ?? ""
+                    print("      Waiting for a retry: \(Format.number(group.waiting))\(next)")
+                }
+                if group.due > 0 { print("      Tried again by the next run: \(Format.number(group.due))") }
+                if group.permanent > 0 { print("      Failed for good: \(Format.number(group.permanent))") }
+            }
+            print("  `rainbarrel download --retry-failed` tries all failed files again now.")
+        }
         if !report.failures.isEmpty {
-            print("\nFailures")
+            print("\nFailed files")
             for failure in report.failures.prefix(20) {
-                print("  \(failure.targetRelPath.sanitizedForTerminal)  (\(failure.attempts) attempts)")
+                var line = "  \(failure.targetRelPath.sanitizedForTerminal)  (\(failure.attempts) attempts"
+                if let retry = failure.retryAfter, failure.attempts < DownloadOptions.defaultMaxAttempts {
+                    line += ", next try \(Format.dateTime(retry))"
+                }
+                print(line + ")")
                 print("      \(failure.reason.sanitizedForTerminal)")
             }
             if queue.failed > report.failures.count { print("  ... and \(queue.failed - report.failures.count) more (use --json)") }

@@ -314,7 +314,8 @@ public final class AmazonClient: @unchecked Sendable {
     /// the 403 is reported as throttling, and only when that call fails too is the sign-in gone.
     /// The listing call of that check passes `false`, so that the check never checks itself.
     /// A call for one file of a download passes `refusesSingleFile`: its 401 is checked the same way,
-    /// and when the sign-in still works only that file is refused.
+    /// and when the sign-in still works only that file is refused. Its 404 is `notAvailableYet`,
+    /// because a new upload answers 404 until Amazon has processed it.
     func check(
         _ response: StreamingSession.Response, confirmForbidden: Bool = true, refusesSingleFile: Bool = false
     ) async throws {
@@ -329,6 +330,8 @@ public final class AmazonClient: @unchecked Sendable {
             guard confirmForbidden else { throw DownloadError.sessionExpired }
             try await confirmSessionAfterForbidden()
             throw DownloadError.throttled(status: 403, retryAfter: nil)
+        case 404 where refusesSingleFile:
+            throw DownloadError.notAvailableYet
         case 408:
             throw DownloadError.network("the request timed out")
         case 429, 500...599:

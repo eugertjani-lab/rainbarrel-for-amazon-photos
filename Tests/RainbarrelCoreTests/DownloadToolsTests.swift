@@ -91,7 +91,10 @@ struct DownloadToolsTests {
         #expect(!outcome.isError, "\(outcome.text)")
         let report = try tools.downloadStatus()
         #expect(report.queue.done == 1 && report.queue.failed == 1 && report.queue.pending == 0)
-        #expect(report.failures.map(\.nodeId) == ["B"] && report.failures[0].reason == "Amazon answered HTTP 404")
+        // HTTP 404 is temporary: the file waits for its cool-down and is not counted as failed for good.
+        #expect(report.failures.map(\.nodeId) == ["B"] && report.failures[0].reason == DownloadError.notAvailableYetMessage)
+        #expect(report.failures[0].attempts == 1 && report.failures[0].retryAfter != nil)
+        #expect(report.failureSummary.waiting == 1 && report.failureSummary.permanent == 0)
         let last = try #require(report.lastRun)
         #expect(last.summary.filesDownloaded == 1 && last.summary.filesFailed == 1)
     }
@@ -196,7 +199,8 @@ struct DownloadToolsTests {
         defer { client.invalidate() }
         let metadata = try await client.fetchMetadata(nodeId: "N1")
         #expect(metadata.md5 == item.md5 && metadata.size == 2000)
-        await #expect(throws: DownloadError.httpStatus(404)) { _ = try await client.fetchMetadata(nodeId: "missing") }
+        // A node that Amazon does not have (yet) is not a reason to give up on it.
+        await #expect(throws: DownloadError.notAvailableYet) { _ = try await client.fetchMetadata(nodeId: "missing") }
         let wrong = StoredSession(host: fx.host, cookies: [SessionCookie(name: "session-id", value: "not-the-id", domain: ".amazon.com")])
         let rejected = try AmazonClient(session: wrong, host: fx.host, configuration: fx.environment.sessionConfiguration(), timeouts: fx.timeouts)
         defer { rejected.invalidate() }

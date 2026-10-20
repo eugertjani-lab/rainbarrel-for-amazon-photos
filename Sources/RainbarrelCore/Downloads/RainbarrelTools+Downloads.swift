@@ -18,6 +18,8 @@ public struct SessionInfo: Codable, Sendable, Equatable {
 public struct DownloadStatusReport: Codable, Sendable, Equatable {
     public var queue: DownloadQueueCounts
     public var failures: [DownloadFailure]
+    /// All failed jobs by reason: waiting for a retry (with the next retry time), due, and permanent.
+    public var failureSummary: DownloadFailureSummary
     public var lastRun: DownloadRunRecord?
     public var session: SessionInfo
     public var throttle: ThrottleConfig
@@ -59,6 +61,17 @@ extension RainbarrelTools {
         return try DownloadJobTable(source: store, queue: store, config: config).recentActivity(now: now)
     }
 
+    /// The failed download jobs by reason and what happens to them next. Reads the state database
+    /// only, so the menu-bar app can ask for it every time it looks at the queue.
+    public func downloadFailureSummary(
+        maxAttempts: Int = DownloadOptions.defaultMaxAttempts
+    ) throws -> DownloadFailureSummary {
+        let config = try loadConfig()
+        let store = try openStore()
+        return try DownloadJobTable(source: store, queue: store, config: config)
+            .failureSummary(maxAttempts: maxAttempts, now: downloadEnvironment.clock.now())
+    }
+
     public func downloadStatus(failureLimit: Int = 20) throws -> DownloadStatusReport {
         let config = try loadConfig()
         let store = try openStore()
@@ -70,7 +83,10 @@ extension RainbarrelTools {
         let driveRoot = config.driveRoot
         let mounted = driveRoot.map { FileOps.isDirectory($0) } ?? false
         return DownloadStatusReport(
-            queue: try table.counts(), failures: try table.failures(limit: failureLimit), lastRun: lastRun,
+            queue: try table.counts(), failures: try table.failures(limit: failureLimit),
+            failureSummary: try table.failureSummary(
+                maxAttempts: DownloadOptions.defaultMaxAttempts, now: downloadEnvironment.clock.now()),
+            lastRun: lastRun,
             session: sessionInfo(), throttle: config.throttle.normalized, amazonHost: config.effectiveAmazonHost,
             driveRoot: driveRoot, targetFolder: config.scanRootPath, driveMounted: mounted,
             driveWritable: mounted ? DownloadEngine.driveLooksWritable(config: config) : nil)
