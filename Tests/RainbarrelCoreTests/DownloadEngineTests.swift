@@ -209,13 +209,14 @@ struct DownloadEngineTests {
         #expect(fx.contents("Amazon Drive/Docs/notes.html") == page.data)
     }
 
-    @Test func aMissingFileOnAmazonFailsForGoodAndIsNotRetried() async throws {
+    // HTTP 404 is temporary (see DownloadRetryTests); any other unexpected status is final.
+    @Test func anUnexpectedStatusFailsForGoodAndIsNotRetried() async throws {
         let fx = try DownloadFixture(files: [file("N1", "a.jpg")])
-        fx.overrideStorage { _, _ in .body(Data(), status: 404) }
+        fx.overrideStorage { _, _ in .body(Data(), status: 400) }
         let summary = try await fx.run()
         #expect(summary.filesFailed == 1)
         let job = try #require(try fx.job("N1"))
-        #expect(job.status == .failed && job.attempts >= 5 && job.lastError == "Amazon answered HTTP 404")
+        #expect(job.status == .failed && job.attempts >= 5 && job.lastError == "Amazon answered HTTP 400")
         fx.clock.advance(60)
         _ = try await fx.run()
         #expect(fx.server.requests(host: fx.storageHost).count == 1)

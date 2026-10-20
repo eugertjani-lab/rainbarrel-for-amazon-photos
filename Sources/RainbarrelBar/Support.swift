@@ -59,7 +59,7 @@ struct Palette {
 /// secondary one that fits its label, a secondary one that shares the row's width, and a square icon
 /// button. All are at least 44 pt high.
 struct PanelButtonStyle: ButtonStyle {
-    enum Kind { case primary, secondary, secondaryFill, icon }
+    enum Kind { case primary, secondary, secondaryFill, icon, compact }
 
     let kind: Kind
     var accent: Color = .accentColor
@@ -104,6 +104,13 @@ private struct PanelButtonBody: View {
                     .foregroundStyle(Color.primary)
                     .frame(width: 44, height: 44)
                     .background(shape.fill(Color.primary.opacity(0.09)))
+            case .compact:
+                // A small button inside a row of text, for example "Retry now".
+                configuration.label
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 28)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.09)))
             }
         }
         .contentShape(shape)

@@ -46,6 +46,7 @@ actor DownloadLedger {
     func prepare(now: Date) throws -> (count: Int, bytes: Int64, interruptedTargets: [String]) {
         let interrupted = try table.interruptedTargets()
         try table.recoverInterrupted(now: now)
+        if options.retryFailed { try table.resetFailed(now: now) }
         _ = try table.sync(includeLiveVideos: options.includeLiveVideos, now: now)
         let totals = try table.totals(options: options, runStartedAt: runStartedAt)
         return (totals.count, totals.bytes, interrupted)
@@ -100,9 +101,11 @@ actor DownloadLedger {
             nodeId: job.nodeId, status: .downloading, attempts: attempts, lastError: .some(error), now: now)
     }
 
-    func markFailed(_ job: DownloadJob, attempts: Int, error: String, now: Date) {
+    /// Record a failure. With `retryAfter`, runs leave the job alone until then.
+    func markFailed(_ job: DownloadJob, attempts: Int, error: String, retryAfter: Date? = nil, now: Date) {
         try? table.setStatus(
-            nodeId: job.nodeId, status: .failed, attempts: attempts, lastError: .some(error), now: now)
+            nodeId: job.nodeId, status: .failed, attempts: attempts, lastError: .some(error),
+            retryAfter: retryAfter, now: now)
     }
 
     /// Record a finished file: the drive index row (so the reconciler counts it as in sync) and the

@@ -112,6 +112,15 @@ public enum DisplayFormat {
         return "\(seconds / 86_400) d ago"
     }
 
+    /// How long until `date`, rounded up: "in 40 min", "in 5 h", "in 3 d". "now" when it has passed.
+    public static func timeUntil(_ date: Date, now: Date = Date()) -> String {
+        let seconds = date.timeIntervalSince(now)
+        guard seconds > 0 else { return "now" }
+        if seconds < 3600 { return "in \(max(1, Int((seconds / 60).rounded(.up)))) min" }
+        if seconds < 48 * 3600 { return "in \(Int((seconds / 3600).rounded(.up))) h" }
+        return "in \(Int((seconds / 86_400).rounded(.up))) d"
+    }
+
     public static func shortMD5(_ md5: String) -> String { String(md5.prefix(8)) }
 
     // MARK: Download progress

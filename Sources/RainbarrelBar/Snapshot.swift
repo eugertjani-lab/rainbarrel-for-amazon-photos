@@ -7,7 +7,8 @@ import SwiftUI
 /// check the layout without clicking.
 ///
 /// Without `--state` it draws the real current report. With `--state` (signed-out, ready,
-/// downloading, waiting, paused, read-only, no-drive, drive-missing, expired or finished) it draws fixture data
+/// downloading, waiting, paused, read-only, no-drive, drive-missing, expired, finished, not-available or
+/// some-failed) it draws fixture data
 /// and touches neither the network, the Keychain nor the data folder. `--menubar` draws the
 /// menu-bar label of that state instead of the panel.
 @MainActor
@@ -133,6 +134,7 @@ enum SnapshotFixture {
         var download = DownloadState.idle
         var writable: Bool? = true
         var currentQueue: QueuePreview? = queue
+        var failures: DownloadFailureSummary?
 
         var running = DownloadDisplay()
         running.filesDone = 1_204
@@ -176,10 +178,26 @@ enum SnapshotFixture {
         case .finished:
             download = .finished("Downloaded 5,709 files · 39.2 GB. 3 could not be downloaded.")
             currentQueue = QueuePreview(count: 3, bytes: 12_400_000)
+        case .notAvailable:
+            currentQueue = QueuePreview(count: 0, bytes: 0)
+            failures = DownloadFailureSummary(groups: [
+                DownloadFailureGroup(
+                    reason: DownloadError.notAvailableYetMessage, waiting: 2, due: 0, permanent: 0,
+                    nextRetryAt: Date().addingTimeInterval(4.5 * 3600))
+            ])
+        case .someFailed:
+            currentQueue = QueuePreview(count: 14, bytes: 52_300_000)
+            failures = DownloadFailureSummary(groups: [
+                DownloadFailureGroup(
+                    reason: DownloadError.notAvailableYetMessage, waiting: 2, due: 0, permanent: 0,
+                    nextRetryAt: Date().addingTimeInterval(4.5 * 3600)),
+                DownloadFailureGroup(
+                    reason: "Amazon refused this file (HTTP 401)", waiting: 0, due: 0, permanent: 1, nextRetryAt: nil),
+            ])
         }
         return AppModel.preview(
             tools: tools, report: report, config: config, account: account, download: download,
-            queue: currentQueue, driveWritable: writable)
+            queue: currentQueue, failures: failures, driveWritable: writable)
     }
 
     /// A report decoded from JSON, because `SyncReport` is built by the core library only.

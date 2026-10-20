@@ -10,6 +10,9 @@ public enum DownloadError: Error, CustomStringConvertible, LocalizedError, Senda
     case throttled(status: Int, retryAfter: TimeInterval?)
     case network(String)
     case httpStatus(Int)
+    /// HTTP 404 for one file. New uploads, Live Photo videos in particular, answer 404 until Amazon has
+    /// processed them, so the file is tried again later instead of being given up.
+    case notAvailableYet
     /// Amazon will not hand out this one file although the sign-in works.
     case refusedFile(String)
     case redirectRefused(host: String)
@@ -26,6 +29,9 @@ public enum DownloadError: Error, CustomStringConvertible, LocalizedError, Senda
     case alreadyRunning
     case invalidResponse(String)
     case fileSystem(String)
+
+    /// The stored reason of a file that answered HTTP 404.
+    public static let notAvailableYetMessage = "Not available from Amazon yet (HTTP 404)"
 
     public static let readOnlyMessage =
         "The backup drive is read-only (for example NTFS on macOS). Reformat it as APFS or exFAT, or choose another folder."
@@ -44,6 +50,8 @@ public enum DownloadError: Error, CustomStringConvertible, LocalizedError, Senda
             return "Network problem: \(detail)"
         case .httpStatus(let status):
             return "Amazon answered HTTP \(status)"
+        case .notAvailableYet:
+            return Self.notAvailableYetMessage
         case .refusedFile(let reason):
             return reason
         case .redirectRefused(let host):
@@ -173,6 +181,81 @@ public struct DownloadFailure: Codable, Sendable, Equatable {
     public var attempts: Int
     public var reason: String
     public var updatedAt: Date
+    /// When the next run tries the file again; nil when no cool-down is set (the next run takes it).
+    public var retryAfter: Date?
+}
+
+/// The failed files that share one reason, split by what happens to them next.
+public struct DownloadFailureGroup: Codable, Sendable, Equatable {
+    public var reason: String
+    /// Waiting for a retry: attempts are left and the cool-down is still running.
+    public var waiting: Int
+    /// Attempts are left and no cool-down runs, so the next download run takes them.
+    public var due: Int
+    /// Out of attempts: they are never tried again unless the failed jobs are reset.
+    public var permanent: Int
+    /// The earliest end of a running cool-down in this group.
+    public var nextRetryAt: Date?
+
+    public init(reason: String, waiting: Int, due: Int, permanent: Int, nextRetryAt: Date? = nil) {
+        self.reason = reason
+        self.waiting = waiting
+        self.due = due
+        self.permanent = permanent
+        self.nextRetryAt = nextRetryAt
+    }
+
+    public var total: Int { waiting + due + permanent }
+}
+
+/// All failed download jobs, grouped by reason, for `download-status` and the menu-bar panel.
+public struct DownloadFailureSummary: Codable, Sendable, Equatable {
+    /// Largest groups first.
+    public var groups: [DownloadFailureGroup]
+    public var waiting: Int
+    public var due: Int
+    public var permanent: Int
+    /// The earliest end of any running cool-down.
+    public var nextRetryAt: Date?
+
+    public init(groups: [DownloadFailureGroup] = []) {
+        self.groups = groups
+        waiting = groups.reduce(0) { $0 + $1.waiting }
+        due = groups.reduce(0) { $0 + $1.due }
+        permanent = groups.reduce(0) { $0 + $1.permanent }
+        nextRetryAt = groups.compactMap(\.nextRetryAt).min()
+    }
+
+    public var total: Int { waiting + due + permanent }
+    public var isEmpty: Bool { total == 0 }
+}
+
+extension DownloadFailureSummary {
+    /// Failed files a run leaves alone: they wait for their cool-down, or they are out of attempts.
+    /// (Files that are due are not counted: the next run takes them.)
+    public var blocked: Int { waiting + permanent }
+
+    /// The sentences for the menu-bar panel: how many files are not available from Amazon yet (with the
+    /// time of the next try), and how many failed for good (with the reason when there is only one).
+    public func noticeLines(now: Date = Date()) -> [String] {
+        var lines: [String] = []
+        if waiting > 0 {
+            var line = waiting == 1
+                ? "1 file is not available from Amazon yet"
+                : "\(DisplayFormat.number(waiting)) files are not available from Amazon yet"
+            if let next = nextRetryAt, next > now { line += " · next try \(DisplayFormat.timeUntil(next, now: now))" }
+            lines.append(line)
+        }
+        if permanent > 0 {
+            var line = permanent == 1 ? "1 file failed" : "\(DisplayFormat.number(permanent)) files failed"
+            let reasons = groups.filter { $0.permanent > 0 }.map(\.reason)
+            if reasons.count == 1, let reason = reasons.first {
+                line += ": " + DisplayFormat.displayFileName(reason, maxLength: 80)
+            }
+            lines.append(line)
+        }
+        return lines
+    }
 }
 
 /// What a download run may do and where it writes.
@@ -189,6 +272,9 @@ public struct DownloadOptions: Sendable, Equatable {
     public var hoursPolicy: ActiveHoursPolicy
     /// A job that failed this many times is not tried again.
     public var maxAttempts: Int
+    /// Before the queue is planned, put every failed job back to pending with no attempts and no
+    /// cool-down, so that this run tries them all again (`rainbarrel download --retry-failed`).
+    public var retryFailed: Bool
     /// How often the run may pause for 15 minutes because Amazon keeps throttling; nil means
     /// without limit, 0 stops the run instead of pausing.
     public var maxLongPauses: Int?
@@ -196,7 +282,7 @@ public struct DownloadOptions: Sendable, Equatable {
     public init(
         year: Int? = nil, limit: Int? = nil, includeLiveVideos: Bool = true, targetRoot: String? = nil,
         concurrency: Int? = nil, maxMBps: Double? = nil, hoursPolicy: ActiveHoursPolicy = .wait,
-        maxAttempts: Int = 5, maxLongPauses: Int? = nil
+        maxAttempts: Int = DownloadOptions.defaultMaxAttempts, maxLongPauses: Int? = nil, retryFailed: Bool = false
     ) {
         self.year = year
         self.limit = limit
@@ -207,7 +293,10 @@ public struct DownloadOptions: Sendable, Equatable {
         self.hoursPolicy = hoursPolicy
         self.maxAttempts = maxAttempts
         self.maxLongPauses = maxLongPauses
+        self.retryFailed = retryFailed
     }
+
+    public static let defaultMaxAttempts = 5
 }
 
 /// What a run does outside the configured active hours.

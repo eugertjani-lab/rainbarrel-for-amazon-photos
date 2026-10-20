@@ -11,7 +11,9 @@ enum AccountState: Equatable, Sendable {
     case expired
 }
 
-/// What a download would do right now, from the planner: online-only items including Live Photo videos.
+/// What a download would do right now, from the planner: the online-only items (Live Photo videos
+/// included) that a run would take. Items that failed and wait for a retry, or are out of attempts,
+/// are not in it; the panel mentions them on a line of their own.
 struct QueuePreview: Equatable, Sendable {
     var count: Int
     var bytes: Int64
@@ -104,8 +106,10 @@ enum PrimaryAction: Equatable {
     /// A drive is chosen but it is not mounted.
     case driveMissing
     case driveReadOnly
-    case ready(count: Int, bytes: Int64, note: String?)
-    case nothingToDownload(note: String?)
+    /// `failures` is nil unless some files wait for a retry or failed for good.
+    case ready(count: Int, bytes: Int64, note: String?, failures: DownloadFailureSummary?)
+    /// With `failures` the panel shows them instead of "Nothing to download".
+    case nothingToDownload(note: String?, failures: DownloadFailureSummary?)
     case downloading(DownloadDisplay, stopping: StopRequest?)
     case paused(DownloadDisplay)
 }
@@ -131,4 +135,8 @@ enum PanelScenario: String, CaseIterable {
     case driveMissing = "drive-missing"
     case expired
     case finished
+    /// Nothing is downloadable, but files wait for Amazon to have them.
+    case notAvailable = "not-available"
+    /// Files to download, and files that wait or failed for good.
+    case someFailed = "some-failed"
 }

@@ -132,10 +132,11 @@ public struct RainbarrelToolRegistry: Sendable {
             name: "download_status",
             description: """
                 Report the state of the downloads: queue counts (pending, downloading, done, failed, skipped \
-                and online-only items not queued yet), recent failures with reasons, the last run's summary, \
-                the Amazon session (signed in or not, host, when it was saved, no cookie values), the throttle \
-                settings, the target folder and whether the drive is mounted and writable. Makes no network \
-                call and writes nothing.
+                and online-only items not queued yet), failed files grouped by reason (how many wait for a \
+                retry and when the next try is, how many failed for good), recent failures with reasons, the \
+                last run's summary, the Amazon session (signed in or not, host, when it was saved, no cookie \
+                values), the throttle settings, the target folder and whether the drive is mounted and \
+                writable. Makes no network call and writes nothing.
                 """,
             inputSchema: schema(),
             readOnly: true),
