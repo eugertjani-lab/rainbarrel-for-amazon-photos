@@ -420,20 +420,17 @@ private struct ProblemView: View {
     }
 }
 
-/// Icon and title of a panel button, with a spinner in place of the icon while its action runs.
+/// Icon and title of a panel button. While its action runs, the icon is dimmed and the title says so.
 private struct LabeledButtonFace: View {
     let title: String
     let symbol: String
     let running: Bool
-    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
         HStack(spacing: 5) {
-            if running && !isSnapshot {
-                ProgressView().controlSize(.small).scaleEffect(0.8).frame(width: 16, height: 16)
-            } else {
-                Image(systemName: symbol).font(.system(size: 14, weight: .medium))
-            }
+            // A static symbol even while running: a spinner would redraw the panel every frame.
+            Image(systemName: symbol).font(.system(size: 14, weight: .medium))
+                .opacity(running ? 0.45 : 1)
             Text(title)
                 .font(.system(size: 12.5, weight: .semibold))
                 .lineLimit(1)
@@ -451,7 +448,9 @@ private struct ButtonRow: View {
     var body: some View {
         HStack(spacing: 8) {
             if model.isScanning {
-                ScanningBlock(progress: model.scanProgress)
+                ScanningBlock(
+                    progress: model.scanProgress,
+                    expectedFiles: model.report.map { $0.driveHashedFiles + $0.driveUnhashedFiles })
                 Button { model.stopScan() } label: {
                     Text("Stop").font(.system(size: 14, weight: .semibold))
                 }
@@ -505,27 +504,43 @@ private struct ButtonRow: View {
     }
 }
 
-/// Shown in place of the Scan button while a scan runs. The scanner does not know in advance how
-/// many files it will visit, so the bar is indeterminate.
+/// Shown in place of the Scan button while a scan runs. The scanner does not know in advance how many
+/// files it will visit, so the bar measures against the files the drive index already holds and only
+/// moves when progress arrives (about once a second). An indeterminate bar would animate every frame,
+/// and the window server would then redraw the panel and its blurred background up to 120 times a
+/// second for the whole scan.
 private struct ScanningBlock: View {
     let progress: ScanProgress?
-    @Environment(\.isSnapshot) private var isSnapshot
+    /// Files in the drive index before the scan started; nil or 0 when unknown.
+    let expectedFiles: Int?
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let palette = Palette(scheme)
-        let text = progress.map { "Scanning… \(DisplayFormat.number($0.filesSeen)) files" } ?? "Scanning…"
+        let seen = progress?.filesSeen ?? 0
+        let expected = expectedFiles ?? 0
+        let text: String = {
+            guard progress != nil else { return "Scanning…" }
+            if expected > 0, seen <= expected {
+                return "Scanning… \(DisplayFormat.number(seen)) of about \(DisplayFormat.number(expected)) files"
+            }
+            return "Scanning… \(DisplayFormat.number(seen)) files"
+        }()
+        let fraction = expected > 0 ? min(Double(seen) / Double(expected), 1) : 0
         VStack(alignment: .leading, spacing: 6) {
             Text(text)
                 .font(.system(size: 12, weight: .medium))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if isSnapshot {
-                Capsule().fill(palette.onDrive.opacity(0.35)).frame(height: 4)
-            } else {
-                ProgressView().progressViewStyle(.linear).tint(palette.onDrive)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.onDrive.opacity(0.2))
+                    Capsule().fill(palette.onDrive).frame(width: proxy.size.width * fraction)
+                }
             }
+            .frame(height: 4)
+            .animation(nil, value: fraction)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
