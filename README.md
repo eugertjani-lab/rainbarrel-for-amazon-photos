@@ -1,9 +1,31 @@
+<p align="center"><img src="docs/images/icon.png" width="128" alt="Rainbarrel icon"></p>
+
 # Rainbarrel for Amazon Photos
 
 [![CI](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/actions/workflows/ci.yml/badge.svg)](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/eugertjani-lab/rainbarrel-for-amazon-photos?sort=semver)](https://github.com/eugertjani-lab/rainbarrel-for-amazon-photos/releases/latest)
 
 A verified local copy of your Amazon Photos library on your own drive.
+
+<p align="center">
+  <img src="docs/images/panel-ready.png" width="260" alt="The menu-bar panel: how much of the library is on the drive, the biggest gaps by year and the backup drive">
+  &nbsp;
+  <img src="docs/images/panel-downloading-dark.png" width="260" alt="The panel in dark mode while missing photos download, with speed and time left">
+  &nbsp;
+  <img src="docs/images/panel-years.png" width="260" alt="The year map: every year of the library and how many photos of it are still only in the cloud">
+</p>
+<p align="center"><sub>The menu-bar app with made-up demo data. Left to right: the overview, a download in dark mode, and the year map.</sub></p>
+
+Rainbarrel is a free, open-source Mac app (with a command line tool that also runs on Linux) for people who keep their photos in Amazon Photos and want a complete copy at home that they can trust. It answers one question exactly: which of my photos and videos are safely on my drive, and which exist only in the cloud? Then it closes the gap.
+
+- It compares your Amazon Photos library with a backup drive by MD5 checksum, so it knows a file is backed up because its content matches, whatever its name or folder.
+- It downloads what is missing into the same folder layout you have in Amazon Photos, checks every file by MD5 before counting it, and never overwrites or deletes anything on the drive.
+- It moves copies you already have (from an old backup or the Amazon Drive desktop sync) into that layout instead of downloading them again.
+- It shows your library by year, including Live Photo videos, so gaps such as a phone that never synced stand out.
+- It can tidy Amazon Photos itself through reviewed plans, for example trashing files that were uploaded empty: every change is listed before anything is sent, applied in small batches, checked afterwards and can be undone. It never empties Amazon's trash.
+- It runs quietly in the menu bar, signs in to Amazon in its own window, pauses and resumes downloads, and keeps to gentle request limits.
+
+It is free under the MIT License, and your library never passes through anyone else's server: Rainbarrel talks only to Amazon, with your own session, from your own Mac.
 
 Rainbarrel for Amazon Photos is an unofficial community project and is not affiliated with, endorsed by or supported by Amazon (see the [disclaimer](#disclaimer)). In short contexts, such as the app, the command line tool and the MCP server, it is called just Rainbarrel. The name is a picture of what it does: a rain barrel catches what falls from the cloud and keeps it at home, and it only fills.
 
