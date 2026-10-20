@@ -707,7 +707,8 @@ final class AppModel {
                     let summary = try tools.scanDrive(
                         hash: true, limit: nil,
                         progress: { progress in
-                            guard throttle.shouldForward() else { return }
+                            // Once a second is enough for a file count and keeps the panel from redrawing constantly.
+                            guard throttle.shouldForward(minimumInterval: 1) else { return }
                             Task { @MainActor in model.scanProgress = progress }
                         },
                         isCancelled: { flag.isCancelled })
